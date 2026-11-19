@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "Comment": {
+      "title": "Comment",
+      "description": "Public comment posted by a Google-authenticated reader on an editorial article.",
+      "type": "object",
+      "properties": {
+        "postId": {
+          "type": "integer",
+          "description": "Numeric ID of the article post."
+        },
+        "authorUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the comment author."
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Display name of the authenticated Google user."
+        },
+        "authorPhotoUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional Google avatar URL of the comment author."
+        },
+        "content": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 1500,
+          "description": "Body text of the comment."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of comment publication."
+        }
+      },
+      "required": ["postId", "authorUid", "authorName", "content", "createdAt"]
+    },
+    "NewsletterSubscription": {
+      "title": "NewsletterSubscription",
+      "description": "Private email subscription record for receiving new articles directly by email.",
+      "type": "object",
+      "properties": {
+        "userUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the subscriber."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 160,
+          "description": "Subscriber email address (isolated PII)."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the subscriber."
+        },
+        "notifyNewArticles": {
+          "type": "boolean",
+          "description": "Whether the reader wants to receive every new article by email."
+        },
+        "preferredPillar": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Preferred editorial theme or 'all'."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when subscription was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when subscription was last updated."
+        }
+      },
+      "required": [
+        "userUid",
+        "email",
+        "displayName",
+        "notifyNewArticles",
+        "preferredPillar",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/comments/{commentId}": {
+      "schema": {
+        "$ref": "#/entities/Comment"
+      },
+      "description": "Publicly readable reader comments on blog posts; only authenticated verified Google users can create or delete their own comments."
+    },
+    "/newsletter_subscriptions/{userId}": {
+      "schema": {
+        "$ref": "#/entities/NewsletterSubscription"
+      },
+      "description": "Isolated PII collection storing reader email subscriptions keyed by auth UID; readable and writable only by the owner."
+    }
+  }
+}

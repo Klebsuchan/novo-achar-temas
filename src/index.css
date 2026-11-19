@@ -1,0 +1,181 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Montserrat", "Plus Jakarta Sans", sans-serif;
+  --font-serif: "Montserrat", "Plus Jakarta Sans", sans-serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Subtle paper grain pattern (CSS-only, zero network request, CLS-safe) */
+.editorial-paper-texture {
+  background-image: radial-gradient(rgba(8, 18, 36, 0.045) 1px, transparent 0);
+  background-size: 20px 20px;
+}
+
+.dark .editorial-paper-texture {
+  background-image: radial-gradient(rgba(245, 183, 49, 0.04) 1px, transparent 0);
+  background-size: 20px 20px;
+}
+
+/* Hide horizontal scrollbars on sleek mobile swipe strips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom Editorial Article Prose Styling (CLS-safe and dual-theme aware) */
+.editorial-prose {
+  line-height: 1.78;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.editorial-prose p {
+  margin-bottom: 1.35rem;
+}
+
+.editorial-prose > p:first-of-type::first-letter {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 2.65rem;
+  line-height: 0.88;
+  float: left;
+  margin-right: 0.65rem;
+  margin-top: 0.2rem;
+  color: #D97706;
+}
+
+@media (min-width: 640px) {
+  .editorial-prose {
+    line-height: 1.82;
+  }
+  .editorial-prose p {
+    margin-bottom: 1.5rem;
+  }
+  .editorial-prose > p:first-of-type::first-letter {
+    font-size: 3.35rem;
+    margin-right: 0.75rem;
+    margin-top: 0.25rem;
+  }
+}
+
+.dark .editorial-prose > p:first-of-type::first-letter {
+  color: #F5B731;
+}
+
+.editorial-prose h2 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.65rem;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  text-transform: uppercase;
+  margin-top: 2.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(180, 140, 60, 0.28);
+  scroll-margin-top: 6rem;
+}
+
+.editorial-prose h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.25rem;
+  line-height: 1.35;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  scroll-margin-top: 6rem;
+}
+
+.editorial-prose h4 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.editorial-prose ul,
+.editorial-prose ol {
+  margin-top: 1rem;
+  margin-bottom: 1.5rem;
+  padding-left: 1.5rem;
+}
+
+.editorial-prose ul {
+  list-style-type: disc;
+}
+
+.editorial-prose ol {
+  list-style-type: decimal;
+}
+
+.editorial-prose li {
+  margin-bottom: 0.5rem;
+}
+
+.editorial-prose strong {
+  font-weight: 700;
+}
+
+.editorial-prose a {
+  color: #B45309;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.dark .editorial-prose a {
+  color: #F5B731;
+}
+
+.editorial-prose blockquote {
+  font-family: var(--font-sans);
+  font-style: italic;
+  font-size: 1.15rem;
+  line-height: 1.65;
+  margin: 2.25rem 0;
+  padding: 1.5rem 2rem;
+  border-top: 1px solid rgba(245, 183, 49, 0.35);
+  border-bottom: 1px solid rgba(245, 183, 49, 0.35);
+  text-align: center;
+}
+
+.editorial-prose figure,
+.editorial-prose .wp-block-image {
+  margin: 2.25rem 0;
+}
+
+.editorial-prose img {
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: cover;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(180, 140, 60, 0.25);
+}
+
+.editorial-prose figcaption {
+  font-family: var(--font-sans);
+  font-style: italic;
+  font-size: 0.8125rem;
+  opacity: 0.75;
+  margin-top: 0.5rem;
+  text-align: center;
+}

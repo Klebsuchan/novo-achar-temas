@@ -1,0 +1,6 @@
+{
+  "name": "Achar Temas — Portal Editorial de História, Ciência, Arte e Cultura",
+  "description": "Blog editorial independente Achar Temas com artigos aprofundados sobre história, ciência, biodiversidade, arte, saúde e cultura pop, otimizado para SEO e Google AdSense.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
