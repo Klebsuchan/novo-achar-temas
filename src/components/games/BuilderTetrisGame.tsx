@@ -83,8 +83,18 @@ function drawArchitecturalCell(
   ctx.fillRect(x + 5, y + 16, size - 10, 3);
 }
 
-export default function BuilderTetrisGame({ articleTitle }: { articleTitle: string }) {
+export default function BuilderTetrisGame({
+  articleTitle,
+  onScoreRecord,
+}: {
+  articleTitle: string;
+  onScoreRecord?: (score: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const onScoreRecordRef = useRef(onScoreRecord);
+  useEffect(() => {
+    onScoreRecordRef.current = onScoreRecord;
+  }, [onScoreRecord]);
   const [phase, setPhase] = useState<GamePhase>('title');
   const [score, setScore] = useState(0);
   const [floors, setFloors] = useState(0);
@@ -122,6 +132,7 @@ export default function BuilderTetrisGame({ articleTitle }: { articleTitle: stri
     if (!isValidPosition(boardRef.current, incoming.matrix, incoming.row, incoming.col)) {
       setPhase('gameover');
       gameSfx.playDamage();
+      onScoreRecordRef.current?.(scoreRef.current);
       return;
     }
     activeRef.current = incoming;
@@ -205,6 +216,9 @@ export default function BuilderTetrisGame({ articleTitle }: { articleTitle: stri
         gameSfx.playPop(240);
       }
       setScore(scoreRef.current);
+      if (clearedLines > 0) {
+        onScoreRecordRef.current?.(scoreRef.current);
+      }
       spawnNextPiece();
     },
     [spawnNextPiece]

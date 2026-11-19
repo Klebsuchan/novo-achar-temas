@@ -7,6 +7,7 @@ import {
   Cpu,
   Home,
 } from 'lucide-react';
+import { trackStoreOutbound } from '../utils/analytics';
 
 interface CuratedCollection {
   id: string;
@@ -15,7 +16,24 @@ interface CuratedCollection {
   description: string;
   highlightItem: string;
   image: string;
-  shopeeUrl: string;
+  searchQuery: string;
+}
+
+function buildShopeeAffiliateUrl(queryText: string, campaignId: string): string {
+  const tag = (import.meta.env.VITE_SHOPEE_AFFILIATE_TAG || 'achartemas').trim();
+  const baseUrl = `https://shopee.com.br/search?keyword=${encodeURIComponent(queryText)}`;
+  const params = new URLSearchParams({
+    utm_source: tag,
+    utm_medium: 'vitrine_editorial',
+    utm_campaign: campaignId,
+  });
+  return `${baseUrl}&${params.toString()}`;
+}
+
+function getMainStoreUrl(): string {
+  const configured = (import.meta.env.VITE_SHOPEE_STORE_URL || '').trim();
+  if (configured.startsWith('https://')) return configured;
+  return buildShopeeAffiliateUrl('organizacao leitura casa iluminacao', 'vitrine_principal');
 }
 
 const CURATED_COLLECTIONS: CuratedCollection[] = [
@@ -27,7 +45,7 @@ const CURATED_COLLECTIONS: CuratedCollection[] = [
       'Acessórios selecionados para transformar seu ambiente de leitura, pesquisa histórica e trabalho remoto com conforto visual e foco.',
     highlightItem: 'Luminária LED articulada + Suporte de livros em madeira',
     image: '/wp-images/content-574-image-3.jpg',
-    shopeeUrl: 'https://shopee.com.br',
+    searchQuery: 'luminaria mesa led suporte livro ergonomico escritorio',
   },
   {
     id: 'casa-acabamentos',
@@ -36,9 +54,8 @@ const CURATED_COLLECTIONS: CuratedCollection[] = [
     description:
       'Inspirado nos nossos artigos mais lidos de arquitetura e formas caseiras: itens práticos para renovar ambientes sem obras pesadas.',
     highlightItem: 'Fitas LED inteligentes, moldes decorativos e organizadores',
-    image:
-      '/wp-images/featured-183-Gere-outra-que-mostre-alguem-consertando-algo-dentro-de-casa-ou-preparando-uma-parede-para-pintura-.-enfim-surpreenda-me-1-1.jpg',
-    shopeeUrl: 'https://shopee.com.br',
+    image: '/src/assets/images/acabamentos_inteligentes_casa_1795095031186.jpg',
+    searchQuery: 'kit ferramentas casa organizador fita led reforma',
   },
   {
     id: 'cultura-colecionaveis',
@@ -48,7 +65,7 @@ const CURATED_COLLECTIONS: CuratedCollection[] = [
       'Para fãs de He-Man, Grunge dos anos 90, heróis clássicos e acústica: peças de decoração e fones de alta fidelidade.',
     highlightItem: 'Quadros retrô, action figures e equipamentos de áudio',
     image: '/wp-images/content-400-image-4.jpg',
-    shopeeUrl: 'https://shopee.com.br',
+    searchQuery: 'fone ouvido bluetooth quadro retro colecionaveis decoracao',
   },
   {
     id: 'jardim-bem-estar',
@@ -58,7 +75,7 @@ const CURATED_COLLECTIONS: CuratedCollection[] = [
       'Tudo para montar sua espiral de ervas aromáticas, cuidar do jardim e acompanhar seus treinos de corrida e natação.',
     highlightItem: 'Kits de cultivo orgânico, vasos autodrenantes e hidratação',
     image: '/wp-images/content-650-image-2.jpg',
-    shopeeUrl: 'https://shopee.com.br',
+    searchQuery: 'vaso autodrenante sementes temperos garrafa corrida esporte',
   },
 ];
 
@@ -87,15 +104,16 @@ export default function Store() {
             Achados Curados para Mentes Curiosas, Casa e Leitura
           </h1>
           <p className="text-sm sm:text-lg text-stone-600 dark:text-slate-300 leading-relaxed mb-5 sm:mb-8">
-            Nossa vitrine oficial da Shopee reúne produtos alinhados aos temas do portal:
-            organização de escritório, iluminação, jardinagem prática, reforma econômica e cultura pop.
+            Nossa vitrine na Shopee reúne seleções práticas alinhadas aos temas do portal:
+            organização de escritório, iluminação, jardinagem, reforma econômica e cultura pop.
           </p>
 
           <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
             <a
-              href="https://shopee.com.br"
+              href={getMainStoreUrl()}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackStoreOutbound('vitrine_principal')}
               className="min-h-[44px] inline-flex items-center justify-center gap-2.5 bg-[#F5B731] hover:bg-[#E09F1F] text-[#081224] px-5 sm:px-6 py-3 sm:py-3.5 rounded-xl md:rounded-sm font-display font-extrabold uppercase tracking-wider text-xs transition-colors whitespace-nowrap shrink-0"
             >
               <ShoppingBag size={17} />
@@ -190,47 +208,51 @@ export default function Store() {
 
       {/* Curated Showcase Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10">
-        {filteredCollections.map((col) => (
-          <article
-            key={col.id}
-            className="bg-white dark:bg-[#0B1930] border border-stone-200 dark:border-[#1B3358] rounded-2xl md:rounded-sm overflow-hidden flex flex-col shadow-xs md:shadow-none"
-          >
-            <div className="h-48 sm:h-52 w-full overflow-hidden bg-stone-200 dark:bg-[#050C18]">
-              <img
-                src={col.image}
-                alt={col.title}
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="p-5 sm:p-6 flex-1 flex flex-col">
-              <div className="text-[11px] sm:text-xs text-[#B45309] dark:text-[#F5B731] font-semibold uppercase tracking-wider mb-1.5">
-                {col.category} · Curadoria Achar Temas
+        {filteredCollections.map((col) => {
+          const collectionHref = buildShopeeAffiliateUrl(col.searchQuery, col.id);
+          return (
+            <article
+              key={col.id}
+              className="bg-white dark:bg-[#0B1930] border border-stone-200 dark:border-[#1B3358] rounded-2xl md:rounded-sm overflow-hidden flex flex-col shadow-xs md:shadow-none"
+            >
+              <div className="h-48 sm:h-52 w-full overflow-hidden bg-stone-200 dark:bg-[#050C18]">
+                <img
+                  src={col.image}
+                  alt={col.title}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
               </div>
-              <h2 className="font-display font-extrabold text-lg sm:text-2xl uppercase text-[#081224] dark:text-[#F4F0E6] mb-2 leading-snug">
-                {col.title}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-600 dark:text-slate-300 leading-relaxed mb-4 flex-1">
-                {col.description}
-              </p>
-              <div className="text-xs text-stone-500 dark:text-slate-400 pt-3 border-t border-stone-200 dark:border-[#1B3358] mb-4">
-                Destaque da seleção:{' '}
-                <strong className="text-[#081224] dark:text-slate-200">{col.highlightItem}</strong>
+              <div className="p-5 sm:p-6 flex-1 flex flex-col">
+                <div className="text-[11px] sm:text-xs text-[#B45309] dark:text-[#F5B731] font-semibold uppercase tracking-wider mb-1.5">
+                  {col.category} · Curadoria Achar Temas
+                </div>
+                <h2 className="font-display font-extrabold text-lg sm:text-2xl uppercase text-[#081224] dark:text-[#F4F0E6] mb-2 leading-snug">
+                  {col.title}
+                </h2>
+                <p className="text-xs sm:text-sm text-stone-600 dark:text-slate-300 leading-relaxed mb-4 flex-1">
+                  {col.description}
+                </p>
+                <div className="text-xs text-stone-500 dark:text-slate-400 pt-3 border-t border-stone-200 dark:border-[#1B3358] mb-4">
+                  Destaque da seleção:{' '}
+                  <strong className="text-[#081224] dark:text-slate-200">{col.highlightItem}</strong>
+                </div>
+                <a
+                  href={collectionHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => trackStoreOutbound(col.id)}
+                  className="min-h-[44px] inline-flex items-center justify-between w-full px-4 py-2.5 rounded-xl md:rounded-sm bg-[#081224] dark:bg-[#F5B731] hover:bg-[#102444] dark:hover:bg-[#E09F1F] text-[#F5B731] dark:text-[#081224] text-xs font-display font-extrabold uppercase tracking-wider transition-colors"
+                >
+                  <span>Ver itens desta seleção na Shopee</span>
+                  <ExternalLink size={14} />
+                </a>
               </div>
-              <a
-                href={col.shopeeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="min-h-[44px] inline-flex items-center justify-between w-full px-4 py-2.5 rounded-xl md:rounded-sm bg-[#081224] dark:bg-[#F5B731] hover:bg-[#102444] dark:hover:bg-[#E09F1F] text-[#F5B731] dark:text-[#081224] text-xs font-display font-extrabold uppercase tracking-wider transition-colors"
-              >
-                <span>Ver itens desta seleção na Shopee</span>
-                <ExternalLink size={14} />
-              </a>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
 
       {/* Transparency & Affiliate Disclosure */}

@@ -12,6 +12,8 @@ import {
   HelpCircle,
   Tag,
   Gamepad2,
+  Bookmark,
+  MessageCircle,
 } from 'lucide-react';
 import {
   Post,
@@ -24,6 +26,7 @@ import {
   processArticleHtml,
   getRelatedPosts,
   stripHtmlTags,
+  buildCleanArticlePath,
 } from '../utils/blogLogic';
 import { getArticleSeo } from '../data/articleSeo';
 import AdSenseSlot from './AdSenseSlot';
@@ -35,6 +38,8 @@ interface ArticleReaderProps {
   post: Post;
   allPosts: Post[];
   categories: Category[];
+  isBookmarked: boolean;
+  onToggleBookmark: (postId: number) => void;
   onBack: () => void;
   onSelectPost: (post: Post) => void;
   onSelectPillar: (pillarId: string) => void;
@@ -45,6 +50,8 @@ export default function ArticleReader({
   post,
   allPosts,
   categories,
+  isBookmarked,
+  onToggleBookmark,
   onBack,
   onSelectPost,
   onSelectPillar,
@@ -93,16 +100,34 @@ export default function ArticleReader({
     };
   }, [processedHtml]);
 
-  const handleCopyShareLink = () => {
-    const shareUrl = `${window.location.origin}${window.location.pathname}?post=${post.id}&tema=${seo.slug}`;
+  const cleanTitle = stripHtmlTags(post.title.rendered);
+  const shareUrl = `${window.location.origin}${buildCleanArticlePath(seo.slug)}`;
+
+  const handleCopyShareLink = async () => {
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: cleanTitle,
+          text: seo.metaDescription,
+          url: shareUrl,
+        });
+        return;
+      } catch {
+        // Fallback to clipboard copy if cancelled or unsupported
+      }
+    }
     try {
-      navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(shareUrl);
     } catch {
       // ignore clipboard errors
     }
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 3000);
   };
+
+  const whatsappHref = `https://wa.me/?text=${encodeURIComponent(`${cleanTitle} — Achar Temas\n${shareUrl}`)}`;
+  const xShareHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(cleanTitle)}&url=${encodeURIComponent(shareUrl)}`;
+  const linkedinHref = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`;
 
   const fontSizeClass = {
     normal: 'text-base sm:text-[17px]',
@@ -247,28 +272,74 @@ export default function ArticleReader({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <a
                 href="#jogo-artigo"
-                className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl md:rounded-sm bg-[#F5B731] hover:bg-[#E09F1F] text-[#081224] text-xs font-display font-extrabold uppercase tracking-wider transition-colors whitespace-nowrap"
+                className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl md:rounded-sm bg-[#F5B731] hover:bg-[#E09F1F] text-[#081224] text-xs font-display font-extrabold uppercase tracking-wider transition-colors whitespace-nowrap"
               >
                 <Gamepad2 size={14} />
-                <span>Jogar Mini-Game</span>
+                <span>Mini-Game</span>
               </a>
+
+              <button
+                type="button"
+                onClick={() => onToggleBookmark(post.id)}
+                aria-pressed={isBookmarked}
+                className={`min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl md:rounded-sm border text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                  isBookmarked
+                    ? 'bg-[#081224] text-[#F5B731] border-[#081224] dark:bg-[#F5B731] dark:text-[#081224] dark:border-[#F5B731]'
+                    : 'border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-[#D97706] dark:hover:border-[#F5B731] text-[#081224] dark:text-[#F4F0E6]'
+                }`}
+              >
+                <Bookmark size={14} className={isBookmarked ? 'fill-current' : ''} />
+                <span>{isBookmarked ? 'Salvo' : 'Salvar'}</span>
+              </button>
+
+              <a
+                href={whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Compartilhar no WhatsApp"
+                className="min-h-[40px] inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl md:rounded-sm border border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-emerald-600 text-xs font-semibold text-emerald-700 dark:text-emerald-400 transition-colors whitespace-nowrap"
+              >
+                <MessageCircle size={14} />
+                <span>WhatsApp</span>
+              </a>
+
+              <a
+                href={xShareHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Compartilhar no X"
+                className="min-h-[40px] inline-flex items-center justify-center px-2.5 py-2 rounded-xl md:rounded-sm border border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-[#081224] dark:hover:border-white text-xs font-bold text-[#081224] dark:text-white transition-colors whitespace-nowrap"
+              >
+                𝕏
+              </a>
+
+              <a
+                href={linkedinHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Compartilhar no LinkedIn"
+                className="min-h-[40px] inline-flex items-center justify-center px-2.5 py-2 rounded-xl md:rounded-sm border border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-[#0284C7] text-xs font-bold text-[#0284C7] dark:text-[#38BDF8] transition-colors whitespace-nowrap"
+              >
+                in
+              </a>
+
               <button
                 type="button"
                 onClick={handleCopyShareLink}
-                className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl md:rounded-sm border border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-[#D97706] dark:hover:border-[#F5B731] text-xs font-semibold text-[#081224] dark:text-[#F4F0E6] transition-colors cursor-pointer whitespace-nowrap"
+                className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl md:rounded-sm border border-stone-200 dark:border-[#1B3358] bg-[#F4F1E8] dark:bg-[#050C18] hover:border-[#D97706] dark:hover:border-[#F5B731] text-xs font-semibold text-[#081224] dark:text-[#F4F0E6] transition-colors cursor-pointer whitespace-nowrap"
               >
                 {copiedLink ? (
                   <>
                     <Check size={14} className="text-emerald-700 dark:text-emerald-400" />
-                    <span>Link Copiado!</span>
+                    <span>Copiado!</span>
                   </>
                 ) : (
                   <>
                     <Share2 size={14} />
-                    <span>Compartilhar</span>
+                    <span>Link</span>
                   </>
                 )}
               </button>
@@ -444,10 +515,17 @@ export default function ArticleReader({
                 </button>
                 <button
                   type="button"
+                  onClick={() => onNavigateTab('sobre')}
+                  className="text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Sobre Nós
+                </button>
+                <button
+                  type="button"
                   onClick={() => onNavigateTab('cookies')}
                   className="text-slate-300 hover:text-white cursor-pointer"
                 >
-                  Política Editorial & Fontes
+                  Política Editorial
                 </button>
               </div>
             </div>

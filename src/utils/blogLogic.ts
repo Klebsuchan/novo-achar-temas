@@ -1,4 +1,16 @@
-import { getArticleSeo } from '../data/articleSeo';
+import { getArticleSeo } from '../data/articleSeo.ts';
+
+export type ActiveView =
+  | 'inicio'
+  | 'artigos'
+  | 'jogos'
+  | 'loja'
+  | 'sobre'
+  | 'contato'
+  | 'privacidade'
+  | 'termos'
+  | 'cookies'
+  | 'admin';
 
 export interface Category {
   id: number;
@@ -23,6 +35,28 @@ export interface Post {
     rendered: string;
   };
   categories: number[];
+  customHeroImage?: string;
+  customFocusKeyword?: string;
+  customMetaDescription?: string;
+  isCmsArticle?: boolean;
+  cmsDocId?: string;
+}
+
+export interface EditorialArticleDoc {
+  docId: string;
+  postId: number;
+  slug: string;
+  title: string;
+  excerpt: string;
+  contentHtml: string;
+  categoryId: number;
+  heroImage: string;
+  published: boolean;
+  focusKeyword: string;
+  metaDescription: string;
+  authorUid: string;
+  createdAtIso: string;
+  updatedAtIso: string;
 }
 
 export interface WPComment {
@@ -147,6 +181,9 @@ const LOCAL_INLINE_IMAGES: Record<string, string> = {
 };
 
 export function getPostHeroImage(post: Post): string {
+  if (post.customHeroImage && post.customHeroImage.trim().length > 0) {
+    return post.customHeroImage.trim();
+  }
   return LOCAL_POST_IMAGE_MAP[post.id] || '/wp-images/content-685-image-4.jpg';
 }
 
@@ -415,9 +452,11 @@ export function buildArticleSchemaJsonLd(post: Post, categoryName: string): stri
   const title = stripHtmlTags(post.title.rendered);
   const seo = getArticleSeo(post, categoryName);
   const heroPath = getPostHeroImage(post);
-  const imageUrl = `https://achartemas.com${heroPath}`;
+  const imageUrl = heroPath.startsWith('http') ? heroPath : `https://achartemas.com${heroPath}`;
   const metrics = calculateReadingMetrics(post.content.rendered);
-  const canonicalUrl = `https://achartemas.com/?post=${post.id}&tema=${seo.slug}`;
+  const canonicalUrl = `https://achartemas.com/artigo/${seo.slug}`;
+  const description = post.customMetaDescription?.trim() || seo.metaDescription;
+  const focusKeyword = post.customFocusKeyword?.trim() || seo.focusKeyword;
 
   const graph: Record<string, unknown>[] = [
     {
@@ -425,11 +464,11 @@ export function buildArticleSchemaJsonLd(post: Post, categoryName: string): stri
       '@id': `${canonicalUrl}#article`,
       headline: seo.seoTitle,
       alternativeHeadline: title,
-      description: seo.metaDescription,
+      description,
       keywords: seo.keywords.join(', '),
       about: {
         '@type': 'Thing',
-        name: seo.focusKeyword,
+        name: focusKeyword,
       },
       image: [
         {
@@ -493,7 +532,7 @@ export function buildArticleSchemaJsonLd(post: Post, categoryName: string): stri
           '@type': 'ListItem',
           position: 2,
           name: categoryName,
-          item: `https://achartemas.com/?tab=artigos`,
+          item: 'https://achartemas.com/artigos',
         },
         {
           '@type': 'ListItem',
@@ -529,3 +568,180 @@ export function buildArticleSchemaJsonLd(post: Post, categoryName: string): stri
     2
   );
 }
+
+// ---------- Clean Path URL Routing & CMS Merging & Bookmarks ----------
+
+export const VALID_VIEWS: ActiveView[] = [
+  'inicio',
+  'artigos',
+  'jogos',
+  'loja',
+  'sobre',
+  'contato',
+  'privacidade',
+  'termos',
+  'cookies',
+  'admin',
+];
+
+export function buildCleanArticlePath(slug: string): string {
+  const clean = (slug || '').replace(/^\/+|\/+$/g, '');
+  return `/artigo/${clean}`;
+}
+
+export function buildCleanViewUrl(view: ActiveView, pillarId?: string): string {
+  if (view === 'inicio') return '/';
+  if (view === 'artigos' && pillarId && pillarId !== 'all') {
+    return `/artigos?pillar=${encodeURIComponent(pillarId)}`;
+  }
+  return `/${view}`;
+}
+
+export interface ParsedAppRoute {
+  view: ActiveView;
+  articleSlug: string | null;
+  articleId: string | null;
+  pillarId: string | null;
+}
+
+export function parseRouteFromLocation(pathname: string, search: string): ParsedAppRoute {
+  const cleanPath = (pathname || '/').replace(/\/+$/, '') || '/';
+  const params = new URLSearchParams(search || '');
+  const postIdParam = params.get('post');
+  const temaParam = params.get('tema');
+  const tabParam = params.get('tab') as ActiveView | null;
+  const pillarParam = params.get('pillar');
+
+  if (cleanPath.startsWith('/artigo/')) {
+    const slugSegment = decodeURIComponent(cleanPath.slice('/artigo/'.length)).trim();
+    if (slugSegment) {
+      return {
+        view: 'artigos',
+        articleSlug: slugSegment,
+        articleId: postIdParam,
+        pillarId: null,
+      };
+    }
+  }
+
+  if (postIdParam || temaParam) {
+    return {
+      view: 'artigos',
+      articleSlug: temaParam,
+      articleId: postIdParam,
+      pillarId: null,
+    };
+  }
+
+  const pathSegment = cleanPath.slice(1) as ActiveView;
+  if (VALID_VIEWS.includes(pathSegment)) {
+    return {
+      view: pathSegment,
+      articleSlug: null,
+      articleId: null,
+      pillarId:
+        pathSegment === 'artigos' &&
+        pillarParam &&
+        EDITORIAL_PILLARS.some((p) => p.id === pillarParam)
+          ? pillarParam
+          : null,
+    };
+  }
+
+  if (pillarParam && EDITORIAL_PILLARS.some((p) => p.id === pillarParam)) {
+    return {
+      view: 'artigos',
+      articleSlug: null,
+      articleId: null,
+      pillarId: pillarParam,
+    };
+  }
+
+  if (tabParam && VALID_VIEWS.includes(tabParam)) {
+    return {
+      view: tabParam,
+      articleSlug: null,
+      articleId: null,
+      pillarId: null,
+    };
+  }
+
+  return {
+    view: 'inicio',
+    articleSlug: null,
+    articleId: null,
+    pillarId: null,
+  };
+}
+
+export function mergeEditorialPosts(
+  basePosts: Post[],
+  cmsArticles: EditorialArticleDoc[]
+): Post[] {
+  const byId = new Map<number, Post>();
+  for (const base of basePosts) {
+    byId.set(base.id, base);
+  }
+
+  for (const docItem of cmsArticles) {
+    if (!docItem.published) continue;
+    byId.set(docItem.postId, {
+      id: docItem.postId,
+      date: docItem.createdAtIso || new Date().toISOString(),
+      modified: docItem.updatedAtIso || docItem.createdAtIso,
+      slug: docItem.slug,
+      title: { rendered: docItem.title },
+      excerpt: { rendered: `<p>${docItem.excerpt}</p>` },
+      content: { rendered: docItem.contentHtml },
+      categories: [docItem.categoryId || 49],
+      customHeroImage: docItem.heroImage || undefined,
+      customFocusKeyword: docItem.focusKeyword || undefined,
+      customMetaDescription: docItem.metaDescription || undefined,
+      isCmsArticle: true,
+      cmsDocId: docItem.docId,
+    });
+  }
+
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+}
+
+export const BOOKMARKS_STORAGE_KEY = 'achar_temas_saved_posts';
+
+export function toggleBookmarkId(currentIds: number[], postId: number): number[] {
+  if (currentIds.includes(postId)) {
+    return currentIds.filter((id) => id !== postId);
+  }
+  return [postId, ...currentIds];
+}
+
+export function loadBookmarkedPostIds(): number[] {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => typeof id === 'number' && Number.isInteger(id) && id > 0);
+  } catch {
+    return [];
+  }
+}
+
+export function saveBookmarkedPostIds(ids: number[]): void {
+  try {
+    localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(ids));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export const EDITORIAL_ADMIN_EMAIL = 'braian.kleber.camargo@gmail.com';
+
+export function isEditorialAdminUser(
+  user: { email?: string | null; emailVerified?: boolean } | null | undefined
+): boolean {
+  return Boolean(user && user.emailVerified === true && user.email === EDITORIAL_ADMIN_EMAIL);
+}
+
+

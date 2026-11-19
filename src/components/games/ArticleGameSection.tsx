@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Gamepad2, Maximize2, Minimize2 } from 'lucide-react';
 import { Post, stripHtmlTags } from '../../utils/blogLogic';
 import {
@@ -7,11 +7,16 @@ import {
   getGameCatalogItem,
   getGameConfigForPost,
 } from '../../games/gameRegistry';
-import WesternShooterGame from './WesternShooterGame';
-import ChemistryLabGame from './ChemistryLabGame';
-import OceanPaintGame from './OceanPaintGame';
-import AthleticsRunnerGame from './AthleticsRunnerGame';
-import BuilderTetrisGame from './BuilderTetrisGame';
+import { useFirebaseAuth } from '../../contexts/FirebaseAuthContext';
+import { recordOfficialGameScore } from '../../services/gameScores';
+import { trackGameEvent } from '../../utils/analytics';
+import GameLeaderboardPanel from './GameLeaderboardPanel';
+
+const WesternShooterGame = lazy(() => import('./WesternShooterGame'));
+const ChemistryLabGame = lazy(() => import('./ChemistryLabGame'));
+const OceanPaintGame = lazy(() => import('./OceanPaintGame'));
+const AthleticsRunnerGame = lazy(() => import('./AthleticsRunnerGame'));
+const BuilderTetrisGame = lazy(() => import('./BuilderTetrisGame'));
 
 interface ArticleGameSectionProps {
   post: Post;
@@ -19,13 +24,33 @@ interface ArticleGameSectionProps {
 
 export default function ArticleGameSection({ post }: ArticleGameSectionProps) {
   const recommended = getGameConfigForPost(post);
+  const { user } = useFirebaseAuth();
   const [activeGameType, setActiveGameType] = useState<GameType>(recommended.gameType);
   const [expanded, setExpanded] = useState(false);
+  const [leaderboardRefresh, setLeaderboardRefresh] = useState(0);
+  const [lastPersonalBest, setLastPersonalBest] = useState<number | undefined>(undefined);
 
   // Sync active game whenever user switches to another article
   useEffect(() => {
     setActiveGameType(recommended.gameType);
+    setLastPersonalBest(undefined);
   }, [recommended.gameType, post.id]);
+
+  const handleScoreRecord = useCallback(
+    (rawScore: number) => {
+      if (!Number.isFinite(rawScore) || rawScore <= 0) return;
+      trackGameEvent(activeGameType, 'score', Math.floor(rawScore));
+      recordOfficialGameScore(user, activeGameType, rawScore)
+        .then(({ personalBest }) => {
+          setLastPersonalBest(personalBest);
+          setLeaderboardRefresh((c) => c + 1);
+        })
+        .catch(() => {
+          // Error telemetry handled inside recordOfficialGameScore
+        });
+    },
+    [user, activeGameType]
+  );
 
   const activeInfo = getGameCatalogItem(activeGameType);
   const cleanTitle = stripHtmlTags(post.title.rendered);
@@ -70,12 +95,37 @@ export default function ArticleGameSection({ post }: ArticleGameSectionProps) {
 
       {/* Render Selected Game Engine */}
       <div>
-        {activeGameType === 'western' && <WesternShooterGame articleTitle={cleanTitle} />}
-        {activeGameType === 'chemistry' && <ChemistryLabGame articleTitle={cleanTitle} />}
-        {activeGameType === 'ocean-paint' && <OceanPaintGame articleTitle={cleanTitle} />}
-        {activeGameType === 'athletics' && <AthleticsRunnerGame articleTitle={cleanTitle} />}
-        {activeGameType === 'builder-tetris' && <BuilderTetrisGame articleTitle={cleanTitle} />}
+        <Suspense
+          fallback={
+            <div className="p-10 text-center text-xs font-mono text-stone-500 dark:text-slate-400">
+              Carregando motor do jogo...
+            </div>
+          }
+        >
+          {activeGameType === 'western' && (
+            <WesternShooterGame articleTitle={cleanTitle} onScoreRecord={handleScoreRecord} />
+          )}
+          {activeGameType === 'chemistry' && (
+            <ChemistryLabGame articleTitle={cleanTitle} onScoreRecord={handleScoreRecord} />
+          )}
+          {activeGameType === 'ocean-paint' && (
+            <OceanPaintGame articleTitle={cleanTitle} onScoreRecord={handleScoreRecord} />
+          )}
+          {activeGameType === 'athletics' && (
+            <AthleticsRunnerGame articleTitle={cleanTitle} onScoreRecord={handleScoreRecord} />
+          )}
+          {activeGameType === 'builder-tetris' && (
+            <BuilderTetrisGame articleTitle={cleanTitle} onScoreRecord={handleScoreRecord} />
+          )}
+        </Suspense>
       </div>
+
+      {/* Portal Top-5 Leaderboard & Personal Best */}
+      <GameLeaderboardPanel
+        gameType={activeGameType}
+        refreshTrigger={leaderboardRefresh}
+        lastPersonalBest={lastPersonalBest}
+      />
 
       {/* Compact Cross-Portal Arcade Switcher Footer */}
       <div className="px-3 sm:px-4 py-3 bg-[#F4F1E8] dark:bg-[#081224] border-t border-stone-200 dark:border-[#1B3358] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -92,7 +142,10 @@ export default function ArticleGameSection({ post }: ArticleGameSectionProps) {
                 key={gt}
                 type="button"
                 data-game-switch={gt}
-                onClick={() => setActiveGameType(gt)}
+                onClick={() => {
+                  setActiveGameType(gt);
+                  setLastPersonalBest(undefined);
+                }}
                 className={`min-h-[36px] px-2.5 py-1 rounded-xl md:rounded-sm text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   isActive
                     ? 'bg-[#081224] text-[#F5B731] dark:bg-[#F5B731] dark:text-[#081224]'

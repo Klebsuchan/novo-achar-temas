@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Shield, FileText, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { updateAnalyticsConsent } from '../utils/analytics';
 
 interface LegalPagesProps {
   page: 'privacidade' | 'termos' | 'cookies';
@@ -27,6 +28,7 @@ export default function LegalPages({ page, onBackHome, onNavigateLegal }: LegalP
     } catch {
       // ignore storage errors
     }
+    updateAnalyticsConsent(analyticsEnabled);
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 4000);
   };

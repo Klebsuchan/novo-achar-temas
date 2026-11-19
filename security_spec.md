@@ -3,31 +3,37 @@
 ## 1. Data Invariants
 
 1. **Default Deny**: All paths not explicitly matched in `/databases/{database}/documents` are denied for both `read` and `write`.
-2. **Comment Identity & Integrity (`/comments/{commentId}`)**:
+2. **Verified Admin Identity (`isAdmin()`)**:
+   - Admin access requires BOTH `request.auth != null && request.auth.token.email_verified == true` AND `request.auth.token.email == 'braian.kleber.camargo@gmail.com'`. Unverified tokens with a matching email are strictly denied.
+3. **Comment Identity & Integrity (`/comments/{commentId}`)**:
    - Any reader may view (`get`, `list`) public article comments, provided `resource.data.postId is int && resource.data.postId > 0`.
    - Only a signed-in user with `request.auth.token.email_verified == true` can create a comment.
-   - `incoming().authorUid` must strictly equal `request.auth.uid`.
-   - `incoming().keys()` must contain `['postId', 'authorUid', 'authorName', 'authorPhotoUrl', 'content', 'createdAt']` (no shadow or ghost fields).
-   - `authorName` must be a string between 2 and 80 characters; `content` must be a string between 3 and 1500 characters; `authorPhotoUrl` must be a string `<= 500` characters.
-   - `createdAt` must equal `request.time`.
-   - Comments are immutable once published (`allow update: if false;`), and may only be deleted by their author (`existing().authorUid == request.auth.uid`).
-3. **Newsletter Subscription PII Isolation (`/newsletter_subscriptions/{userId}`)**:
-   - Contains PII (`email`). Strictly isolated per user: `allow get` is only permitted when `isSignedIn() && isValidId(userId) && request.auth.uid == userId`.
-   - `allow list: if false;` prevents any enumeration or scraping of subscriber emails.
-   - `allow create, update` requires `isSignedIn() && request.auth.token.email_verified == true && isValidId(userId) && request.auth.uid == userId`, `incoming().userUid == request.auth.uid`, and `incoming().email == request.auth.token.email`.
-   - On update, `createdAt`, `userUid`, and `email` are immutable, `updatedAt == request.time`, and `affectedKeys().hasOnly(['displayName', 'notifyNewArticles', 'preferredPillar', 'updatedAt'])`.
+   - `incoming().authorUid == request.auth.uid`, strict key check, bounded sizes, `createdAt == request.time`.
+   - Comments are immutable (`allow update: if false;`), and may be deleted by their author or `isAdmin()`.
+4. **Newsletter Subscription PII Isolation (`/newsletter_subscriptions/{userId}`)**:
+   - Contains PII (`email`). `get` is permitted for owner (`request.auth.uid == userId`) or `isAdmin()`. `list` is restricted strictly to `isAdmin() && existing().userUid is string`.
+   - `create`/`update` requires verified owner, `userUid == request.auth.uid`, `email == request.auth.token.email`, immutable `createdAt`/`userUid`/`email` on update.
+5. **Editorial CMS Articles (`/articles/{articleId}`)**:
+   - Public may `get` or `list` ONLY documents where `existing().published == true`. Drafts (`published == false`) are readable only by `isAdmin()`.
+   - Only `isAdmin()` may `create`, `update`, or `delete` articles, enforcing strict schema bounds, `authorUid == request.auth.uid` on create, immutable `authorUid`/`createdAt` on update, and server timestamps.
+6. **Contact Messages PII Isolation (`/contact_messages/{messageId}`)**:
+   - Contains PII (`email`). Visitors may `create` new messages with strict bounds, `status == 'new'`, and `createdAt == request.time`.
+   - All reads (`get`, `list`), status `update`s (`['status']` only), and `delete`s are restricted strictly to `isAdmin()`.
+7. **Game Leaderboard Scores (`/game_scores/{scoreId}`)**:
+   - Publicly readable (`get`, `list`) when `existing().bestScore is int && existing().bestScore >= 0` (no PII).
+   - Verified Google players may `create` or `update` ONLY their own deterministic doc `request.auth.uid + '_' + incoming().gameType`, enforcing monotonic `incoming().bestScore >= existing().bestScore`, immutable `userUid`/`gameType`/`createdAt`, and valid `gameType` allowlist.
 
 ## 2. The "Dirty Dozen" Payloads
 
-1. **Unauthenticated Comment Creation**: `{ postId: 685, authorUid: "anon", authorName: "Hacker", authorPhotoUrl: "", content: "Spam", createdAt: SERVER_TIMESTAMP }` -> `PERMISSION_DENIED`
-2. **Unverified Email Comment Creation**: Authenticated user with `email_verified: false` creating a comment -> `PERMISSION_DENIED`
-3. **Identity Spoofing on Comment**: Authenticated as `user_A`, payload has `authorUid: "user_B"` -> `PERMISSION_DENIED`
-4. **Shadow Field Injection on Comment**: Payload includes extra key `isAdmin: true` -> `PERMISSION_DENIED`
-5. **Oversized Comment Content (Resource Poisoning)**: `content` length > 1500 chars -> `PERMISSION_DENIED`
-6. **Forged Client Timestamp on Comment**: `createdAt` is a past timestamp instead of `request.time` -> `PERMISSION_DENIED`
-7. **Unauthorized Comment Mutation**: Author attempts to `update` an existing comment -> `PERMISSION_DENIED`
-8. **Cross-User Comment Deletion**: `user_A` attempts to `delete` a comment where `authorUid == "user_B"` -> `PERMISSION_DENIED`
-9. **PII Leak via Cross-User Get on Subscription**: `user_A` attempts `get(/newsletter_subscriptions/user_B)` -> `PERMISSION_DENIED`
-10. **PII Leak via List Enumeration on Subscriptions**: Authenticated user attempts `list(/newsletter_subscriptions)` -> `PERMISSION_DENIED`
-11. **Email Spoofing on Subscription**: `user_A` (`a@gmail.com`) attempts to subscribe `victim@gmail.com` -> `PERMISSION_DENIED`
-12. **Immortal Field Tampering on Subscription Update**: `user_A` attempts to change `createdAt` or `userUid` during an update -> `PERMISSION_DENIED`
+1. **Unauthenticated Comment Creation** -> `PERMISSION_DENIED`
+2. **Unverified Email Comment Creation** (`email_verified: false`) -> `PERMISSION_DENIED`
+3. **Identity Spoofing on Comment** (`authorUid != request.auth.uid`) -> `PERMISSION_DENIED`
+4. **Shadow Field Injection on Comment** (`isAdmin: true`) -> `PERMISSION_DENIED`
+5. **Oversized Comment Content** (`content.length > 1500`) -> `PERMISSION_DENIED`
+6. **Forged Client Timestamp on Comment** (`createdAt != request.time`) -> `PERMISSION_DENIED`
+7. **Unauthorized Comment Mutation** (any `update`) -> `PERMISSION_DENIED`
+8. **Cross-User Comment Deletion** (`authorUid != request.auth.uid` by non-admin) -> `PERMISSION_DENIED`
+9. **PII Leak via Cross-User Get on Subscription** (`user_A` reading `user_B`) -> `PERMISSION_DENIED`
+10. **PII Leak via List Enumeration on Subscriptions / Contact Messages by Non-Admin** -> `PERMISSION_DENIED`
+11. **Admin Email Spoofing without `email_verified: true`** (`email == 'braian.kleber.camargo@gmail.com'`, `email_verified: false` creating/listing articles or reading contact messages) -> `PERMISSION_DENIED`
+12. **Score Tampering / Lowering or Cross-User Write on `game_scores`** (wrong `scoreId`, lower `bestScore`, or extra field) -> `PERMISSION_DENIED`

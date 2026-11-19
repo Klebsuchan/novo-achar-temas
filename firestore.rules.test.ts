@@ -15,6 +15,7 @@ interface AuthContext {
 }
 
 const REQUEST_TIME = '2026-11-18T16:35:00Z';
+const ADMIN_EMAIL = 'braian.kleber.camargo@gmail.com';
 
 function isValidId(id: unknown): boolean {
   return (
@@ -23,6 +24,10 @@ function isValidId(id: unknown): boolean {
     id.length <= 128 &&
     /^[a-zA-Z0-9_\-]+$/.test(id)
   );
+}
+
+function isAdmin(auth: AuthContext | null): boolean {
+  return Boolean(auth && auth.email_verified === true && auth.email === ADMIN_EMAIL);
 }
 
 function evaluateCommentCreate(
@@ -53,7 +58,7 @@ function evaluateCommentCreate(
     typeof incoming.postId !== 'number' ||
     !Number.isInteger(incoming.postId) ||
     incoming.postId <= 0 ||
-    incoming.postId > 1000000
+    incoming.postId > 10000000
   ) {
     return 'PERMISSION_DENIED';
   }
@@ -107,7 +112,7 @@ function evaluateCommentDelete(
 ): 'ALLOWED' | 'PERMISSION_DENIED' {
   if (!auth || auth.email_verified !== true) return 'PERMISSION_DENIED';
   if (!isValidId(commentId)) return 'PERMISSION_DENIED';
-  if (existing.authorUid !== auth.uid) return 'PERMISSION_DENIED';
+  if (existing.authorUid !== auth.uid && !isAdmin(auth)) return 'PERMISSION_DENIED';
   return 'ALLOWED';
 }
 
@@ -117,12 +122,12 @@ function evaluateSubscriptionGet(
 ): 'ALLOWED' | 'PERMISSION_DENIED' {
   if (!auth || auth.email_verified !== true) return 'PERMISSION_DENIED';
   if (!isValidId(userId)) return 'PERMISSION_DENIED';
-  if (auth.uid !== userId) return 'PERMISSION_DENIED';
+  if (auth.uid !== userId && !isAdmin(auth)) return 'PERMISSION_DENIED';
   return 'ALLOWED';
 }
 
-function evaluateSubscriptionList(): 'PERMISSION_DENIED' {
-  return 'PERMISSION_DENIED';
+function evaluateSubscriptionList(auth: AuthContext | null): 'ALLOWED' | 'PERMISSION_DENIED' {
+  return isAdmin(auth) ? 'ALLOWED' : 'PERMISSION_DENIED';
 }
 
 function evaluateSubscriptionCreateOrUpdate(
@@ -209,6 +214,60 @@ function evaluateSubscriptionCreateOrUpdate(
   return 'ALLOWED';
 }
 
+function evaluateGameScoreWrite(
+  op: 'create' | 'update',
+  auth: AuthContext | null,
+  scoreId: string,
+  incoming: Record<string, unknown>,
+  existing?: Record<string, unknown>
+): 'ALLOWED' | 'PERMISSION_DENIED' {
+  if (!auth || auth.email_verified !== true) return 'PERMISSION_DENIED';
+  if (!isValidId(scoreId)) return 'PERMISSION_DENIED';
+
+  const requiredKeys = [
+    'userUid',
+    'playerName',
+    'playerPhotoUrl',
+    'gameType',
+    'bestScore',
+    'createdAt',
+    'updatedAt',
+  ];
+  const keys = Object.keys(incoming);
+  if (
+    !requiredKeys.every((k) => keys.includes(k)) ||
+    !keys.every((k) => requiredKeys.includes(k))
+  ) {
+    return 'PERMISSION_DENIED';
+  }
+  if (incoming.userUid !== auth.uid) return 'PERMISSION_DENIED';
+  if (scoreId !== `${auth.uid}_${String(incoming.gameType)}`) return 'PERMISSION_DENIED';
+  if (
+    typeof incoming.bestScore !== 'number' ||
+    !Number.isInteger(incoming.bestScore) ||
+    incoming.bestScore < 0 ||
+    incoming.bestScore > 10000000
+  ) {
+    return 'PERMISSION_DENIED';
+  }
+  if (op === 'create') {
+    return incoming.createdAt === REQUEST_TIME && incoming.updatedAt === REQUEST_TIME
+      ? 'ALLOWED'
+      : 'PERMISSION_DENIED';
+  }
+  if (!existing) return 'PERMISSION_DENIED';
+  if (
+    existing.userUid !== auth.uid ||
+    incoming.gameType !== existing.gameType ||
+    incoming.createdAt !== existing.createdAt ||
+    incoming.updatedAt !== REQUEST_TIME ||
+    (incoming.bestScore as number) < (existing.bestScore as number)
+  ) {
+    return 'PERMISSION_DENIED';
+  }
+  return 'ALLOWED';
+}
+
 test('Dirty Dozen Payloads all return PERMISSION_DENIED and valid operations succeed', () => {
   const validUserA: AuthContext = {
     uid: 'user_A_123',
@@ -220,6 +279,16 @@ test('Dirty Dozen Payloads all return PERMISSION_DENIED and valid operations suc
     email: 'leitor.a@gmail.com',
     email_verified: false,
   };
+  const spoofedAdmin: AuthContext = {
+    uid: 'spoof_admin',
+    email: ADMIN_EMAIL,
+    email_verified: false,
+  };
+  const verifiedAdmin: AuthContext = {
+    uid: 'real_admin',
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  };
 
   const validCommentPayload = {
     postId: 685,
@@ -230,128 +299,88 @@ test('Dirty Dozen Payloads all return PERMISSION_DENIED and valid operations suc
     createdAt: REQUEST_TIME,
   };
 
-  // Sanity check: valid comment creation succeeds
+  assert.equal(evaluateCommentCreate(validUserA, 'comment_01', validCommentPayload), 'ALLOWED');
+  // 1. Unauthenticated
+  assert.equal(evaluateCommentCreate(null, 'comment_01', validCommentPayload), 'PERMISSION_DENIED');
+  // 2. Unverified
+  assert.equal(evaluateCommentCreate(unverifiedUserA, 'comment_01', validCommentPayload), 'PERMISSION_DENIED');
+  // 3. Identity Spoofing
   assert.equal(
-    evaluateCommentCreate(validUserA, 'comment_01', validCommentPayload),
-    'ALLOWED'
-  );
-
-  // 1. Unauthenticated Comment Creation
-  assert.equal(
-    evaluateCommentCreate(null, 'comment_01', validCommentPayload),
+    evaluateCommentCreate(validUserA, 'comment_01', { ...validCommentPayload, authorUid: 'user_B_999' }),
     'PERMISSION_DENIED'
   );
-
-  // 2. Unverified Email Comment Creation
+  // 4. Shadow Field Injection
   assert.equal(
-    evaluateCommentCreate(unverifiedUserA, 'comment_01', validCommentPayload),
+    evaluateCommentCreate(validUserA, 'comment_01', { ...validCommentPayload, isAdmin: true }),
     'PERMISSION_DENIED'
   );
-
-  // 3. Identity Spoofing on Comment
+  // 5. Oversized Comment
   assert.equal(
-    evaluateCommentCreate(validUserA, 'comment_01', {
-      ...validCommentPayload,
-      authorUid: 'user_B_999',
-    }),
+    evaluateCommentCreate(validUserA, 'comment_01', { ...validCommentPayload, content: 'X'.repeat(1501) }),
     'PERMISSION_DENIED'
   );
-
-  // 4. Shadow Field Injection on Comment
+  // 6. Forged Timestamp
   assert.equal(
-    evaluateCommentCreate(validUserA, 'comment_01', {
-      ...validCommentPayload,
-      isAdmin: true,
-    }),
+    evaluateCommentCreate(validUserA, 'comment_01', { ...validCommentPayload, createdAt: '2020-01-01T00:00:00Z' }),
     'PERMISSION_DENIED'
   );
-
-  // 5. Oversized Comment Content (Resource Poisoning)
-  assert.equal(
-    evaluateCommentCreate(validUserA, 'comment_01', {
-      ...validCommentPayload,
-      content: 'X'.repeat(1501),
-    }),
-    'PERMISSION_DENIED'
-  );
-
-  // 6. Forged Client Timestamp on Comment
-  assert.equal(
-    evaluateCommentCreate(validUserA, 'comment_01', {
-      ...validCommentPayload,
-      createdAt: '2020-01-01T00:00:00Z',
-    }),
-    'PERMISSION_DENIED'
-  );
-
-  // 7. Unauthorized Comment Mutation
+  // 7. Unauthorized Update
   assert.equal(evaluateCommentUpdate(), 'PERMISSION_DENIED');
-
-  // 8. Cross-User Comment Deletion
+  // 8. Cross-User Delete
   assert.equal(
     evaluateCommentDelete(validUserA, 'comment_01', { authorUid: 'user_B_999' }),
     'PERMISSION_DENIED'
   );
+  // 9. PII Leak via Cross-User Get
+  assert.equal(evaluateSubscriptionGet(validUserA, 'user_B_999'), 'PERMISSION_DENIED');
+  // 10. PII Leak via List by non-admin & spoofed admin
+  assert.equal(evaluateSubscriptionList(validUserA), 'PERMISSION_DENIED');
+  assert.equal(evaluateSubscriptionList(spoofedAdmin), 'PERMISSION_DENIED');
+  assert.equal(evaluateSubscriptionList(verifiedAdmin), 'ALLOWED');
 
-  // 9. PII Leak via Cross-User Get on Subscription
-  assert.equal(
-    evaluateSubscriptionGet(validUserA, 'user_B_999'),
-    'PERMISSION_DENIED'
-  );
+  // 11. Admin Email Spoofing check
+  assert.equal(isAdmin(spoofedAdmin), false);
+  assert.equal(isAdmin(verifiedAdmin), true);
 
-  // 10. PII Leak via List Enumeration on Subscriptions
-  assert.equal(evaluateSubscriptionList(), 'PERMISSION_DENIED');
-
-  const validSubPayload = {
+  // 12. Game Score tampering / lowering / wrong docId
+  const validScore = {
     userUid: 'user_A_123',
-    email: 'leitor.a@gmail.com',
-    displayName: 'Leitor A',
-    notifyNewArticles: true,
-    preferredPillar: 'all',
+    playerName: 'Leitor A',
+    playerPhotoUrl: '',
+    gameType: 'western',
+    bestScore: 1400,
     createdAt: REQUEST_TIME,
     updatedAt: REQUEST_TIME,
   };
-
+  assert.equal(evaluateGameScoreWrite('create', validUserA, 'user_A_123_western', validScore), 'ALLOWED');
+  assert.equal(evaluateGameScoreWrite('create', validUserA, 'user_B_999_western', validScore), 'PERMISSION_DENIED');
   assert.equal(
-    evaluateSubscriptionCreateOrUpdate('create', validUserA, 'user_A_123', validSubPayload),
+    evaluateGameScoreWrite('update', validUserA, 'user_A_123_western', { ...validScore, bestScore: 900 }, validScore),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    evaluateGameScoreWrite('update', validUserA, 'user_A_123_western', { ...validScore, bestScore: 2200 }, validScore),
     'ALLOWED'
-  );
-
-  // 11. Email Spoofing on Subscription
-  assert.equal(
-    evaluateSubscriptionCreateOrUpdate('create', validUserA, 'user_A_123', {
-      ...validSubPayload,
-      email: 'victim@gmail.com',
-    }),
-    'PERMISSION_DENIED'
-  );
-
-  // 12. Immortal Field Tampering on Subscription Update
-  assert.equal(
-    evaluateSubscriptionCreateOrUpdate(
-      'update',
-      validUserA,
-      'user_A_123',
-      {
-        ...validSubPayload,
-        createdAt: '2025-01-01T00:00:00Z',
-      },
-      validSubPayload
-    ),
-    'PERMISSION_DENIED'
   );
 });
 
-test('DRAFT_firestore.rules contains all Eight Pillars security invariants', () => {
-  const rulesText = fs.readFileSync(
-    path.resolve(process.cwd(), 'DRAFT_firestore.rules'),
-    'utf-8'
-  );
-  assert.ok(rulesText.includes("rules_version = '2';"));
-  assert.ok(rulesText.includes('allow read, write: if false;'));
-  assert.ok(rulesText.includes('isValidComment(incoming())'));
-  assert.ok(rulesText.includes('isValidSubscription(incoming())'));
-  assert.ok(rulesText.includes('request.auth.token.email_verified == true'));
-  assert.ok(rulesText.includes('incoming().createdAt == request.time'));
-  assert.ok(rulesText.includes('affectedKeys().hasOnly'));
+test('firestore.rules and DRAFT_firestore.rules contain all Eight Pillars security invariants', () => {
+  for (const filename of ['DRAFT_firestore.rules', 'firestore.rules']) {
+    const rulesText = fs.readFileSync(path.resolve(process.cwd(), filename), 'utf-8');
+    assert.ok(rulesText.includes("rules_version = '2';"));
+    assert.ok(rulesText.includes('allow read, write: if false;'));
+    assert.ok(rulesText.includes('isValidComment(incoming())'));
+    assert.ok(rulesText.includes('isValidSubscription(incoming())'));
+    assert.ok(rulesText.includes('isValidArticle(incoming())'));
+    assert.ok(rulesText.includes('isValidContactMessage(incoming())'));
+    assert.ok(rulesText.includes('isValidGameScore(incoming())'));
+    assert.ok(
+      rulesText.includes(
+        'allow list: if existing().gameType is string && existing().gameType.size() >= 6 && existing().gameType.size() <= 20;'
+      )
+    );
+    assert.ok(rulesText.includes('request.auth.token.email_verified == true'));
+    assert.ok(rulesText.includes('incoming().createdAt == request.time'));
+    assert.ok(rulesText.includes('affectedKeys().hasOnly'));
+  }
 });

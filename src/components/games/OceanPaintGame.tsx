@@ -223,7 +223,13 @@ function drawLineArtTemplate(ctx: CanvasRenderingContext2D, scene: OceanScene) {
   ctx.restore();
 }
 
-export default function OceanPaintGame({ articleTitle }: { articleTitle: string }) {
+export default function OceanPaintGame({
+  articleTitle,
+  onScoreRecord,
+}: {
+  articleTitle: string;
+  onScoreRecord?: (score: number) => void;
+}) {
   const paintCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lineCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const animCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -420,7 +426,11 @@ export default function OceanPaintGame({ articleTitle }: { articleTitle: string 
     }
 
     pCtx.putImageData(pImg, 0, 0);
-    setStrokesCount((c) => c + 1);
+    const nextStrokes = strokesCount + 1;
+    setStrokesCount(nextStrokes);
+    if (nextStrokes >= 3 && nextStrokes % 3 === 0) {
+      onScoreRecord?.(nextStrokes * 25);
+    }
     gameSfx.playPop(520);
   };
 
@@ -459,7 +469,11 @@ export default function OceanPaintGame({ articleTitle }: { articleTitle: string 
       isDrawingRef.current = true;
       lastPtRef.current = pt;
       drawBrushSegment(pt.x, pt.y, pt.x + 0.1, pt.y + 0.1);
-      setStrokesCount((c) => c + 1);
+      const nextStrokes = strokesCount + 1;
+      setStrokesCount(nextStrokes);
+      if (nextStrokes >= 3 && nextStrokes % 4 === 0) {
+        onScoreRecord?.(nextStrokes * 25);
+      }
     }
   };
 
@@ -492,6 +506,9 @@ export default function OceanPaintGame({ articleTitle }: { articleTitle: string 
     link.download = `pintura-oceano-${scene}.png`;
     link.href = merged.toDataURL('image/png');
     link.click();
+    if (strokesCount > 0) {
+      onScoreRecord?.(strokesCount * 25 + 100);
+    }
     gameSfx.playSuccess();
   };
 
@@ -679,7 +696,8 @@ export default function OceanPaintGame({ articleTitle }: { articleTitle: string 
           ))}
         </div>
         <div className="text-xs font-mono text-stone-600 dark:text-slate-300">
-          Pinceladas: <strong>{strokesCount}</strong>
+          Pinceladas: <strong>{strokesCount}</strong> · Criatividade:{' '}
+          <strong className="text-[#B45309] dark:text-[#F5B731]">{strokesCount * 25} pts</strong>
         </div>
       </div>
     </div>

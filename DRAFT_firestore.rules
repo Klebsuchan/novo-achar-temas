@@ -27,6 +27,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'braian.kleber.camargo@gmail.com';
+    }
+
     // Validation Blueprint: Comment
     function isValidComment(data) {
       return data.keys().hasAll([
@@ -47,7 +51,7 @@ service cloud.firestore {
         ]) &&
         data.postId is int &&
         data.postId > 0 &&
-        data.postId <= 1000000 &&
+        data.postId <= 10000000 &&
         data.authorUid is string &&
         isValidId(data.authorUid) &&
         data.authorUid == request.auth.uid &&
@@ -100,6 +104,141 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    // Validation Blueprint: EditorialArticle
+    function isValidArticle(data) {
+      return data.keys().hasAll([
+          'postId',
+          'slug',
+          'title',
+          'excerpt',
+          'contentHtml',
+          'categoryId',
+          'heroImage',
+          'published',
+          'focusKeyword',
+          'metaDescription',
+          'authorUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'postId',
+          'slug',
+          'title',
+          'excerpt',
+          'contentHtml',
+          'categoryId',
+          'heroImage',
+          'published',
+          'focusKeyword',
+          'metaDescription',
+          'authorUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.postId is int &&
+        data.postId >= 1000 &&
+        data.postId <= 10000000 &&
+        data.slug is string &&
+        data.slug.size() >= 2 &&
+        data.slug.size() <= 160 &&
+        data.title is string &&
+        data.title.size() >= 4 &&
+        data.title.size() <= 180 &&
+        data.excerpt is string &&
+        data.excerpt.size() >= 10 &&
+        data.excerpt.size() <= 500 &&
+        data.contentHtml is string &&
+        data.contentHtml.size() >= 20 &&
+        data.contentHtml.size() <= 100000 &&
+        data.categoryId is int &&
+        data.categoryId >= 1 &&
+        data.categoryId <= 1000 &&
+        data.heroImage is string &&
+        data.heroImage.size() <= 500 &&
+        data.published is bool &&
+        data.focusKeyword is string &&
+        data.focusKeyword.size() <= 120 &&
+        data.metaDescription is string &&
+        data.metaDescription.size() <= 200 &&
+        data.authorUid is string &&
+        isValidId(data.authorUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: ContactMessage (Isolated PII)
+    function isValidContactMessage(data) {
+      return data.keys().hasAll([
+          'name',
+          'email',
+          'subject',
+          'message',
+          'status',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'name',
+          'email',
+          'subject',
+          'message',
+          'status',
+          'createdAt'
+        ]) &&
+        data.name is string &&
+        data.name.size() >= 2 &&
+        data.name.size() <= 100 &&
+        data.email is string &&
+        data.email.size() >= 5 &&
+        data.email.size() <= 160 &&
+        data.subject is string &&
+        data.subject.size() >= 3 &&
+        data.subject.size() <= 140 &&
+        data.message is string &&
+        data.message.size() >= 10 &&
+        data.message.size() <= 3000 &&
+        data.status is string &&
+        data.status in ['new', 'read', 'replied'] &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: GameScore
+    function isValidGameScore(data) {
+      return data.keys().hasAll([
+          'userUid',
+          'playerName',
+          'playerPhotoUrl',
+          'gameType',
+          'bestScore',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userUid',
+          'playerName',
+          'playerPhotoUrl',
+          'gameType',
+          'bestScore',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.userUid is string &&
+        isValidId(data.userUid) &&
+        data.userUid == request.auth.uid &&
+        data.playerName is string &&
+        data.playerName.size() >= 2 &&
+        data.playerName.size() <= 60 &&
+        data.playerPhotoUrl is string &&
+        data.playerPhotoUrl.size() <= 500 &&
+        data.gameType is string &&
+        data.gameType in ['western', 'chemistry', 'ocean-paint', 'athletics', 'builder-tetris'] &&
+        data.bestScore is int &&
+        data.bestScore >= 0 &&
+        data.bestScore <= 10000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // Public Article Comments Collection
     match /comments/{commentId} {
       allow get: if isValidId(commentId) && existing().postId is int && existing().postId > 0;
@@ -111,15 +250,15 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if isVerifiedUser() &&
         isValidId(commentId) &&
-        existing().authorUid == request.auth.uid;
+        (existing().authorUid == request.auth.uid || isAdmin());
     }
 
     // Isolated PII Newsletter Subscriptions Collection
     match /newsletter_subscriptions/{userId} {
       allow get: if isVerifiedUser() &&
         isValidId(userId) &&
-        request.auth.uid == userId;
-      allow list: if false;
+        (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin() && existing().userUid is string;
       allow create: if isVerifiedUser() &&
         isValidId(userId) &&
         request.auth.uid == userId &&
@@ -143,6 +282,87 @@ service cloud.firestore {
       allow delete: if isVerifiedUser() &&
         isValidId(userId) &&
         request.auth.uid == userId;
+    }
+
+    // Editorial CMS Articles Collection
+    match /articles/{articleId} {
+      allow get: if isValidId(articleId) && (existing().published == true || isAdmin());
+      allow list: if existing().published == true || isAdmin();
+      allow create: if isAdmin() &&
+        isValidId(articleId) &&
+        isValidArticle(incoming()) &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(articleId) &&
+        isValidArticle(incoming()) &&
+        incoming().authorUid == existing().authorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'slug',
+          'title',
+          'excerpt',
+          'contentHtml',
+          'categoryId',
+          'heroImage',
+          'published',
+          'focusKeyword',
+          'metaDescription',
+          'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(articleId);
+    }
+
+    // Contact Messages Collection (Isolated PII - Admin-Only Read)
+    match /contact_messages/{messageId} {
+      allow get: if isAdmin() && isValidId(messageId);
+      allow list: if isAdmin() && existing().status is string;
+      allow create: if isValidId(messageId) &&
+        isValidContactMessage(incoming()) &&
+        incoming().status == 'new' &&
+        incoming().createdAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(messageId) &&
+        isValidContactMessage(incoming()) &&
+        incoming().name == existing().name &&
+        incoming().email == existing().email &&
+        incoming().subject == existing().subject &&
+        incoming().message == existing().message &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isAdmin() && isValidId(messageId);
+    }
+
+    // Public Leaderboard Game Scores Collection
+    match /game_scores/{scoreId} {
+      allow get: if isValidId(scoreId) && existing().bestScore is int && existing().bestScore >= 0;
+      allow list: if existing().gameType is string && existing().gameType.size() >= 6 && existing().gameType.size() <= 20;
+      allow create: if isVerifiedUser() &&
+        isValidId(scoreId) &&
+        isValidGameScore(incoming()) &&
+        scoreId == (request.auth.uid + '_' + incoming().gameType) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(scoreId) &&
+        isValidGameScore(incoming()) &&
+        existing().userUid == request.auth.uid &&
+        incoming().userUid == existing().userUid &&
+        incoming().gameType == existing().gameType &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().bestScore >= existing().bestScore &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'playerName',
+          'playerPhotoUrl',
+          'bestScore',
+          'updatedAt'
+        ]);
+      allow delete: if isVerifiedUser() &&
+        isValidId(scoreId) &&
+        (existing().userUid == request.auth.uid || isAdmin());
     }
   }
 }

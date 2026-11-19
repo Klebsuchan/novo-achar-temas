@@ -17,8 +17,18 @@ import {
   stripHtmlTags,
   buildArticleSchemaJsonLd,
   buildSiteSchemaJsonLd,
+  buildCleanArticlePath,
+  buildCleanViewUrl,
+  parseRouteFromLocation,
+  mergeEditorialPosts,
+  toggleBookmarkId,
   Post,
 } from './blogLogic';
+import {
+  buildRssFeedXml,
+  buildSitemapXml,
+  injectSeoMetaIntoHtml,
+} from './seoHelpers';
 
 const samplePosts: Post[] = [
   {
@@ -205,3 +215,103 @@ test('all 36 articles have complete unique SEO profiles and valid heading hierar
     assert.equal(resolved.slug, seo.slug);
   }
 });
+
+test('clean URL router, CMS post merger, bookmarks, RSS 2.0, Sitemap, and SSR HTML injector work accurately', () => {
+  assert.equal(buildCleanArticlePath('constantino'), '/artigo/constantino');
+  assert.equal(buildCleanViewUrl('sobre'), '/sobre');
+  assert.equal(buildCleanViewUrl('artigos', 'historia-cultura'), '/artigos?pillar=historia-cultura');
+
+  const cleanArticleRoute = parseRouteFromLocation(
+    '/artigo/constantino-ascensao-cristianismo-imperio-romano',
+    ''
+  );
+  assert.equal(cleanArticleRoute.view, 'artigos');
+  assert.equal(cleanArticleRoute.articleSlug, 'constantino-ascensao-cristianismo-imperio-romano');
+
+  const legacyRoute = parseRouteFromLocation('/', '?post=685&tema=constantino-ascensao-cristianismo-imperio-romano');
+  assert.equal(legacyRoute.articleId, '685');
+
+  const sobreRoute = parseRouteFromLocation('/sobre', '');
+  assert.equal(sobreRoute.view, 'sobre');
+
+  const merged = mergeEditorialPosts(samplePosts, [
+    {
+      docId: 'cms_1001',
+      postId: 1001,
+      slug: 'artigo-novo-teste',
+      title: 'Artigo Novo Publicado',
+      excerpt: 'Resumo editorial novo.',
+      contentHtml: '<p>Conteúdo publicado via CMS.</p>',
+      categoryId: 49,
+      heroImage: '/wp-images/content-685-image-4.jpg',
+      published: true,
+      focusKeyword: 'Teste CMS',
+      metaDescription: 'Descrição CMS',
+      authorUid: 'admin_1',
+      createdAtIso: '2026-11-18T12:00:00Z',
+      updatedAtIso: '2026-11-18T12:00:00Z',
+    },
+    {
+      docId: 'cms_1002',
+      postId: 1002,
+      slug: 'rascunho-oculto',
+      title: 'Rascunho Privado',
+      excerpt: 'Não deve aparecer.',
+      contentHtml: '<p>Conteúdo privado.</p>',
+      categoryId: 49,
+      heroImage: '',
+      published: false,
+      focusKeyword: '',
+      metaDescription: '',
+      authorUid: 'admin_1',
+      createdAtIso: '2026-11-19T12:00:00Z',
+      updatedAtIso: '2026-11-19T12:00:00Z',
+    },
+  ]);
+  assert.equal(merged.length, samplePosts.length + 1);
+  assert.equal(merged[0].id, 1001);
+
+  assert.deepEqual(toggleBookmarkId([685], 666), [666, 685]);
+  assert.deepEqual(toggleBookmarkId([666, 685], 666), [685]);
+
+  const rssXml = buildRssFeedXml(
+    samplePosts,
+    (p) => ({
+      slug: getArticleSeo(p as Post).slug,
+      heroPath: getPostHeroImage(p as Post),
+      categoryName: 'História',
+    }),
+    'https://achartemas.com'
+  );
+  assert.ok(rssXml.includes('<rss version="2.0"'));
+  assert.ok(rssXml.includes('https://achartemas.com/artigo/constantino-ascensao-cristianismo-imperio-romano'));
+
+  const sitemapXml = buildSitemapXml(
+    samplePosts,
+    (p) => ({
+      slug: getArticleSeo(p as Post).slug,
+      heroPath: getPostHeroImage(p as Post),
+    }),
+    'https://achartemas.com'
+  );
+  assert.ok(sitemapXml.includes('https://achartemas.com/sobre'));
+  assert.ok(sitemapXml.includes('https://achartemas.com/jogos'));
+  assert.ok(sitemapXml.includes('https://achartemas.com/artigo/constantino-ascensao-cristianismo-imperio-romano'));
+
+  const templateHtml = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf-8');
+  const injected = injectSeoMetaIntoHtml(templateHtml, {
+    title: 'Constantino — Teste SSR',
+    description: 'Descrição SSR única do artigo.',
+    keywords: 'Constantino, Roma',
+    canonicalUrl: 'https://achartemas.com/artigo/constantino-ascensao-cristianismo-imperio-romano',
+    ogType: 'article',
+    ogUrl: 'https://achartemas.com/artigo/constantino-ascensao-cristianismo-imperio-romano',
+    ogImage: 'https://achartemas.com/wp-images/content-685-image-4.jpg',
+    ogImageAlt: 'Constantino',
+    rssUrl: 'https://achartemas.com/rss.xml',
+  });
+  assert.ok(injected.includes('<title>Constantino — Teste SSR</title>'));
+  assert.ok(injected.includes('property="og:image" content="https://achartemas.com/wp-images/content-685-image-4.jpg"'));
+  assert.ok(injected.includes('application/rss+xml'));
+});
+

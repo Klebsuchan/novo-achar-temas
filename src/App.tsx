@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import {
   Search,
   Menu,
@@ -12,24 +12,35 @@ import {
   ShoppingBag,
   LogIn,
   LogOut,
+  Bookmark,
+  PenSquare,
 } from 'lucide-react';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { db, OperationType, handleFirestoreError } from './firebase';
 import { getAllCategories, getAllPosts, Post } from './services/api';
 import {
+  ActiveView,
   EDITORIAL_PILLARS,
+  EditorialArticleDoc,
+  buildCleanArticlePath,
+  buildCleanViewUrl,
   calculateReadingMetrics,
   filterAndSortPosts,
   formatEditorialDate,
   getCategoryNameForPost,
   getPostHeroImage,
+  isEditorialAdminUser,
+  loadBookmarkedPostIds,
+  mergeEditorialPosts,
+  parseRouteFromLocation,
+  saveBookmarkedPostIds,
   stripHtmlTags,
+  toggleBookmarkId,
   buildArticleSchemaJsonLd,
   buildSiteSchemaJsonLd,
 } from './utils/blogLogic';
 import { getArticleSeo } from './data/articleSeo';
-import ArticleReader from './components/ArticleReader';
-import SearchModal from './components/SearchModal';
-import Store from './components/Store';
-import LegalPages from './components/LegalPages';
+import { initAnalyticsIfAllowed, trackArticleRead, trackPageView } from './utils/analytics';
 import AdSenseSlot from './components/AdSenseSlot';
 import NewsletterBox from './components/NewsletterBox';
 import {
@@ -38,25 +49,39 @@ import {
   ParallaxScrollPlane,
 } from './components/ParallaxMotion';
 import { useFirebaseAuth } from './contexts/FirebaseAuthContext';
-import JogosAutoraisPage from './components/games/JogosAutoraisPage';
 
-type ActiveView =
-  | 'inicio'
-  | 'artigos'
-  | 'jogos'
-  | 'loja'
-  | 'privacidade'
-  | 'termos'
-  | 'cookies';
+const ArticleReader = lazy(() => import('./components/ArticleReader'));
+const SearchModal = lazy(() => import('./components/SearchModal'));
+const Store = lazy(() => import('./components/Store'));
+const LegalPages = lazy(() => import('./components/LegalPages'));
+const AboutPage = lazy(() => import('./components/AboutPage'));
+const ContactPage = lazy(() => import('./components/ContactPage'));
+const EditorialAdminPage = lazy(() => import('./components/EditorialAdminPage'));
+const JogosAutoraisPage = lazy(() => import('./components/games/JogosAutoraisPage'));
+
+const ViewSuspenseFallback = () => (
+  <div className="w-full px-4 py-16 text-center text-xs font-mono uppercase tracking-wider text-stone-500 dark:text-slate-400">
+    Carregando seção editorial...
+  </div>
+);
 
 export default function App() {
-  const allPosts = useMemo(() => getAllPosts(), []);
+  const basePosts = useMemo(() => getAllPosts(), []);
   const allCategories = useMemo(() => getAllCategories(), []);
   const { user, signInWithGoogle, signOut } = useFirebaseAuth();
+  const isAdmin = isEditorialAdminUser(user);
+
+  const [cmsArticles, setCmsArticles] = useState<EditorialArticleDoc[]>([]);
+  const allPosts = useMemo(
+    () => mergeEditorialPosts(basePosts, cmsArticles),
+    [basePosts, cmsArticles]
+  );
 
   const [activeView, setActiveView] = useState<ActiveView>('inicio');
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [selectedPillarId, setSelectedPillarId] = useState<string>('all');
+  const [showSavedOnly, setShowSavedOnly] = useState<boolean>(false);
+  const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => loadBookmarkedPostIds());
   const [sortBy, setSortBy] = useState<'recent' | 'reading-time' | 'title'>('recent');
   const [visibleCount, setVisibleCount] = useState<number>(12);
 
@@ -65,6 +90,53 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [showCookieConsent, setShowCookieConsent] = useState<boolean>(false);
   const [readingProgress, setReadingProgress] = useState<number>(0);
+
+  const fetchCmsArticles = useCallback(async () => {
+    try {
+      const colRef = collection(db, 'articles');
+      const q = isAdmin ? colRef : query(colRef, where('published', '==', true));
+      const snap = await getDocs(q);
+      const items: EditorialArticleDoc[] = [];
+      snap.forEach((docSnap) => {
+        const data = docSnap.data();
+        items.push({
+          docId: docSnap.id,
+          postId: Number(data.postId || 0),
+          slug: String(data.slug || ''),
+          title: String(data.title || ''),
+          excerpt: String(data.excerpt || ''),
+          contentHtml: String(data.contentHtml || ''),
+          categoryId: Number(data.categoryId || 49),
+          heroImage: String(data.heroImage || ''),
+          published: Boolean(data.published),
+          focusKeyword: String(data.focusKeyword || ''),
+          metaDescription: String(data.metaDescription || ''),
+          authorUid: String(data.authorUid || ''),
+          createdAtIso:
+            data.createdAt && typeof data.createdAt.toDate === 'function'
+              ? data.createdAt.toDate().toISOString()
+              : new Date().toISOString(),
+          updatedAtIso:
+            data.updatedAt && typeof data.updatedAt.toDate === 'function'
+              ? data.updatedAt.toDate().toISOString()
+              : new Date().toISOString(),
+        });
+      });
+      setCmsArticles(items);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'articles');
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    fetchCmsArticles().catch(() => {
+      // Captured in handleFirestoreError
+    });
+  }, [fetchCmsArticles]);
+
+  useEffect(() => {
+    initAnalyticsIfAllowed();
+  }, []);
 
   // Initialize theme from localStorage (Default: Warm Starlight Paper Light)
   useEffect(() => {
@@ -84,21 +156,17 @@ export default function App() {
     }
   }, []);
 
-  // Hydrate initial view or article from URL search params for shareable SEO links
+  // Hydrate initial view or article from clean pathname (/artigo/:slug) and legacy query params
   useEffect(() => {
     const syncFromUrl = () => {
-      const params = new URLSearchParams(window.location.search);
-      const postIdParam = params.get('post');
-      const temaParam = params.get('tema');
-      const tabParam = params.get('tab') as ActiveView | null;
-      const pillarParam = params.get('pillar');
+      const parsed = parseRouteFromLocation(window.location.pathname, window.location.search);
 
-      if (postIdParam || temaParam) {
+      if (parsed.articleId || parsed.articleSlug) {
         const found = allPosts.find((p) => {
-          if (postIdParam && String(p.id) === postIdParam) return true;
-          if (temaParam) {
+          if (parsed.articleId && String(p.id) === parsed.articleId) return true;
+          if (parsed.articleSlug) {
             const seoSlug = getArticleSeo(p).slug;
-            return seoSlug === temaParam || p.slug === temaParam;
+            return seoSlug === parsed.articleSlug || p.slug === parsed.articleSlug;
           }
           return false;
         });
@@ -110,26 +178,14 @@ export default function App() {
       }
 
       setSelectedPost(null);
-      if (pillarParam && EDITORIAL_PILLARS.some((p) => p.id === pillarParam)) {
-        setSelectedPillarId(pillarParam);
+      if (parsed.pillarId) {
+        setSelectedPillarId(parsed.pillarId);
+        setShowSavedOnly(false);
         setActiveView('artigos');
         return;
       }
 
-      const validTabs: ActiveView[] = [
-        'inicio',
-        'artigos',
-        'jogos',
-        'loja',
-        'privacidade',
-        'termos',
-        'cookies',
-      ];
-      if (tabParam && validTabs.includes(tabParam)) {
-        setActiveView(tabParam);
-      } else {
-        setActiveView('inicio');
-      }
+      setActiveView(parsed.view);
     };
 
     syncFromUrl();
@@ -137,7 +193,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, [allPosts]);
 
-  // Dynamic SEO Head Tags, OpenGraph Article Metadata, Twitter Cards & Schema.org JSON-LD injection
+  // Dynamic SEO Head Tags, OpenGraph Article Metadata, Twitter Cards, Schema.org JSON-LD & GA4 page_view
   useEffect(() => {
     const schemaScript = document.getElementById('schema-jsonld');
     const setMeta = (selector: string, content: string) => {
@@ -151,19 +207,21 @@ export default function App() {
       const catName = getCategoryNameForPost(selectedPost, allCategories);
       const seo = getArticleSeo(selectedPost, catName);
       const fullTitle = `${seo.seoTitle} — Achar Temas`;
-      const canonicalUrl = `https://achartemas.com/?post=${selectedPost.id}&tema=${seo.slug}`;
+      const cleanPath = buildCleanArticlePath(seo.slug);
+      const canonicalUrl = `https://achartemas.com${cleanPath}`;
+      const metaDesc = selectedPost.customMetaDescription?.trim() || seo.metaDescription;
       const heroPath = getPostHeroImage(selectedPost);
-      const absoluteImage = `${origin}${heroPath}`;
+      const absoluteImage = heroPath.startsWith('http') ? heroPath : `${origin}${heroPath}`;
 
       document.title = fullTitle;
-      setMeta('meta[name="description"]', seo.metaDescription);
+      setMeta('meta[name="description"]', metaDesc);
       setMeta('meta[name="keywords"]', seo.keywords.join(', '));
       canonical?.setAttribute('href', canonicalUrl);
 
       setMeta('meta[property="og:type"]', 'article');
-      setMeta('meta[property="og:url"]', `${origin}${window.location.pathname}?post=${selectedPost.id}&tema=${seo.slug}`);
+      setMeta('meta[property="og:url"]', canonicalUrl);
       setMeta('meta[property="og:title"]', fullTitle);
-      setMeta('meta[property="og:description"]', seo.metaDescription);
+      setMeta('meta[property="og:description"]', metaDesc);
       setMeta('meta[property="og:image"]', absoluteImage);
       setMeta('meta[property="og:image:alt"]', cleanTitle);
 
@@ -173,29 +231,32 @@ export default function App() {
       setMeta('meta[property="article:tag"]', seo.keywords.join(', '));
 
       setMeta('meta[name="twitter:title"]', fullTitle);
-      setMeta('meta[name="twitter:description"]', seo.metaDescription);
+      setMeta('meta[name="twitter:description"]', metaDesc);
       setMeta('meta[name="twitter:image"]', absoluteImage);
       setMeta('meta[name="twitter:image:alt"]', cleanTitle);
 
       if (schemaScript) {
         schemaScript.textContent = buildArticleSchemaJsonLd(selectedPost, catName);
       }
+
+      trackPageView(cleanPath, fullTitle);
     } else {
       const viewTitles: Record<ActiveView, string> = {
         inicio: 'Achar Temas — Portal Editorial de História, Ciência, Arte e Cultura',
         artigos: 'Acervo Completo de Artigos — Achar Temas',
         jogos: 'Jogos Autorais — Arcade Interativo Achar Temas',
         loja: 'Vitrine Oficial Shopee — Achar Temas',
+        sobre: 'Sobre Nós & Política Editorial — Achar Temas',
+        contato: 'Contato & Fale Conosco — Achar Temas',
         privacidade: 'Política de Privacidade & LGPD — Achar Temas',
         termos: 'Termos de Uso — Achar Temas',
         cookies: 'Política Editorial, Cookies & Comentários — Achar Temas',
+        admin: 'Painel Editorial — Achar Temas',
       };
       const defaultDesc =
         'Blog editorial independente Achar Temas com artigos aprofundados sobre história, ciência, biodiversidade, arte, saúde e cultura pop, otimizado para SEO e Google AdSense.';
-      const canonicalUrl =
-        activeView === 'inicio'
-          ? 'https://achartemas.com/'
-          : `https://achartemas.com/?tab=${activeView}`;
+      const cleanPath = buildCleanViewUrl(activeView);
+      const canonicalUrl = `https://achartemas.com${cleanPath}`;
       const defaultImg = `${origin}/wp-images/content-685-image-4.jpg`;
 
       document.title = viewTitles[activeView];
@@ -226,6 +287,8 @@ export default function App() {
       if (schemaScript) {
         schemaScript.textContent = buildSiteSchemaJsonLd();
       }
+
+      trackPageView(cleanPath, viewTitles[activeView]);
     }
   }, [selectedPost, activeView, allCategories]);
 
@@ -282,17 +345,14 @@ export default function App() {
     setActiveView(view);
     setIsMobileMenuOpen(false);
     if (pillarId) {
+      setShowSavedOnly(false);
       setSelectedPillarId(pillarId);
       setVisibleCount(12);
-    } else if (view === 'artigos' && !pillarId) {
+    } else if (view === 'artigos') {
+      setShowSavedOnly(false);
       setVisibleCount(12);
     }
-    const url =
-      view === 'inicio'
-        ? '/'
-        : pillarId && pillarId !== 'all'
-          ? `/?tab=artigos&pillar=${pillarId}`
-          : `/?tab=${view}`;
+    const url = buildCleanViewUrl(view, pillarId);
     window.history.pushState({}, '', url);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -302,8 +362,21 @@ export default function App() {
     setSelectedPost(post);
     setActiveView('artigos');
     setIsMobileMenuOpen(false);
-    window.history.pushState({}, '', `/?post=${post.id}&tema=${seo.slug}`);
+    window.history.pushState({}, '', buildCleanArticlePath(seo.slug));
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    trackArticleRead(
+      post.id,
+      stripHtmlTags(post.title.rendered),
+      getCategoryNameForPost(post, allCategories)
+    );
+  };
+
+  const handleToggleBookmark = (postId: number) => {
+    setBookmarkedIds((prev) => {
+      const next = toggleBookmarkId(prev, postId);
+      saveBookmarkedPostIds(next);
+      return next;
+    });
   };
 
   const handleAcceptCookies = () => {
@@ -320,15 +393,14 @@ export default function App() {
   const secondaryPosts = allPosts.slice(1, 4);
   const recentHighlightPosts = allPosts.slice(4, 10);
 
-  // Filtered Posts for Archive View
-  const archivePosts = useMemo(
-    () =>
-      filterAndSortPosts(allPosts, {
-        pillarId: selectedPillarId,
-        sortBy,
-      }),
-    [allPosts, selectedPillarId, sortBy]
-  );
+  // Filtered Posts for Archive View (supports Saved / Bookmarked filter)
+  const archivePosts = useMemo(() => {
+    const base = filterAndSortPosts(allPosts, {
+      pillarId: showSavedOnly ? 'all' : selectedPillarId,
+      sortBy,
+    });
+    return showSavedOnly ? base.filter((p) => bookmarkedIds.includes(p.id)) : base;
+  }, [allPosts, selectedPillarId, sortBy, showSavedOnly, bookmarkedIds]);
 
   const displayedArchivePosts = archivePosts.slice(0, visibleCount);
   const totalWordCount = useMemo(
@@ -382,10 +454,10 @@ export default function App() {
             <span>Achar Temas</span>
           </button>
 
-          {/* Zone 2: 5 concise single-line navigation links (Desktop) */}
+          {/* Zone 2: Concise single-line navigation links (Desktop) */}
           <nav
             aria-label="Navegação principal"
-            className="hidden md:flex items-center gap-6 lg:gap-7 text-xs font-display font-bold uppercase tracking-wider text-stone-600 dark:text-slate-300"
+            className="hidden md:flex items-center gap-3 lg:gap-5 xl:gap-7 text-[11px] lg:text-xs font-display font-bold uppercase tracking-wider text-stone-600 dark:text-slate-300"
           >
             <button
               type="button"
@@ -430,6 +502,28 @@ export default function App() {
               }`}
             >
               Loja
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToView('sobre')}
+              className={`whitespace-nowrap shrink-0 pb-1 transition-colors cursor-pointer ${
+                activeView === 'sobre' && !selectedPost
+                  ? 'text-[#B45309] dark:text-[#F5B731] border-b-2 border-[#B45309] dark:border-[#F5B731]'
+                  : 'hover:text-[#081224] dark:hover:text-white'
+              }`}
+            >
+              Sobre
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToView('contato')}
+              className={`whitespace-nowrap shrink-0 pb-1 transition-colors cursor-pointer ${
+                activeView === 'contato' && !selectedPost
+                  ? 'text-[#B45309] dark:text-[#F5B731] border-b-2 border-[#B45309] dark:border-[#F5B731]'
+                  : 'hover:text-[#081224] dark:hover:text-white'
+              }`}
+            >
+              Contato
             </button>
             <button
               type="button"
@@ -540,6 +634,28 @@ export default function App() {
             </button>
             <button
               type="button"
+              onClick={() => navigateToView('sobre')}
+              className={`min-h-[46px] text-left px-3.5 rounded-xl text-sm font-display font-bold uppercase tracking-wider cursor-pointer ${
+                activeView === 'sobre' && !selectedPost
+                  ? 'bg-[#F4F1E8] dark:bg-[#0D1E3A] text-[#B45309] dark:text-[#F5B731]'
+                  : 'hover:bg-stone-100 dark:hover:bg-[#0D1E3A]'
+              }`}
+            >
+              Sobre Nós
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToView('contato')}
+              className={`min-h-[46px] text-left px-3.5 rounded-xl text-sm font-display font-bold uppercase tracking-wider cursor-pointer ${
+                activeView === 'contato' && !selectedPost
+                  ? 'bg-[#F4F1E8] dark:bg-[#0D1E3A] text-[#B45309] dark:text-[#F5B731]'
+                  : 'hover:bg-stone-100 dark:hover:bg-[#0D1E3A]'
+              }`}
+            >
+              Contato
+            </button>
+            <button
+              type="button"
               onClick={() => navigateToView('privacidade')}
               className={`min-h-[46px] text-left px-3.5 rounded-xl text-sm font-display font-bold uppercase tracking-wider cursor-pointer ${
                 activeView === 'privacidade' || activeView === 'termos' || activeView === 'cookies'
@@ -549,6 +665,20 @@ export default function App() {
             >
               Privacidade & Termos
             </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => navigateToView('admin')}
+                className={`min-h-[46px] text-left px-3.5 rounded-xl text-sm font-display font-bold uppercase tracking-wider cursor-pointer inline-flex items-center gap-2 ${
+                  activeView === 'admin'
+                    ? 'bg-[#081224] text-[#F5B731]'
+                    : 'text-[#B45309] dark:text-[#F5B731] hover:bg-stone-100 dark:hover:bg-[#0D1E3A]'
+                }`}
+              >
+                <PenSquare size={15} />
+                <span>Painel Editorial</span>
+              </button>
+            )}
 
             <div className="mt-2 pt-3 border-t border-stone-200 dark:border-[#1B3358] flex items-center justify-between gap-3 px-1">
               {!user ? (
@@ -642,6 +772,17 @@ export default function App() {
               </div>
             )}
 
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => navigateToView('admin')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-[#081224] text-[#F5B731] hover:bg-[#102444] text-[11px] font-display font-bold uppercase tracking-wider cursor-pointer whitespace-nowrap"
+              >
+                <PenSquare size={12} />
+                <span>Painel Editorial</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={toggleTheme}
@@ -660,15 +801,19 @@ export default function App() {
       <main className="flex-1 overflow-x-clip">
         {/* VIEW 1: ARTICLE DETAIL READER */}
         {selectedPost && (
-          <ArticleReader
-            post={selectedPost}
-            allPosts={allPosts}
-            categories={allCategories}
-            onBack={() => navigateToView('artigos', selectedPillarId)}
-            onSelectPost={openPost}
-            onSelectPillar={(pillarId) => navigateToView('artigos', pillarId)}
-            onNavigateTab={(tab) => navigateToView(tab as ActiveView)}
-          />
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <ArticleReader
+              post={selectedPost}
+              allPosts={allPosts}
+              categories={allCategories}
+              isBookmarked={bookmarkedIds.includes(selectedPost.id)}
+              onToggleBookmark={handleToggleBookmark}
+              onBack={() => navigateToView('artigos', selectedPillarId)}
+              onSelectPost={openPost}
+              onSelectPillar={(pillarId) => navigateToView('artigos', pillarId)}
+              onNavigateTab={(tab) => navigateToView(tab as ActiveView)}
+            />
+          </Suspense>
         )}
 
         {/* VIEW 2: LOGO-HARMONIZED COSMIC NAVY & SOLAR GOLD PARALLAX HOME PAGE */}
@@ -1384,14 +1529,18 @@ export default function App() {
                 Acervo Editorial Completo · {archivePosts.length} de {allPosts.length} artigos
               </div>
               <h1 className="font-display text-2xl sm:text-5xl font-black uppercase tracking-tight mb-2 sm:mb-3">
-                {selectedPillarId === 'all'
-                  ? 'Todos os Artigos Publicados'
-                  : EDITORIAL_PILLARS.find((p) => p.id === selectedPillarId)?.title}
+                {showSavedOnly
+                  ? 'Artigos Salvos para Ler Depois'
+                  : selectedPillarId === 'all'
+                    ? 'Todos os Artigos Publicados'
+                    : EDITORIAL_PILLARS.find((p) => p.id === selectedPillarId)?.title}
               </h1>
               <p className="text-sm text-stone-600 dark:text-slate-300 max-w-2xl">
-                {selectedPillarId === 'all'
-                  ? `Explore nossa biblioteca completa com ${totalWordCount.toLocaleString('pt-BR')} palavras de conteúdo original revisado.`
-                  : EDITORIAL_PILLARS.find((p) => p.id === selectedPillarId)?.subtitle}
+                {showSavedOnly
+                  ? 'Seus artigos favoritados neste dispositivo ficam reunidos aqui para leitura rápida.'
+                  : selectedPillarId === 'all'
+                    ? `Explore nossa biblioteca completa com ${totalWordCount.toLocaleString('pt-BR')} palavras de conteúdo original revisado.`
+                    : EDITORIAL_PILLARS.find((p) => p.id === selectedPillarId)?.subtitle}
               </p>
             </div>
 
@@ -1405,31 +1554,51 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={selectedPillarId === 'all'}
+                  aria-selected={!showSavedOnly && selectedPillarId === 'all'}
                   onClick={() => {
+                    setShowSavedOnly(false);
                     setSelectedPillarId('all');
                     setVisibleCount(12);
                   }}
                   className={`min-h-[38px] px-3 py-1.5 text-xs font-display font-bold uppercase tracking-wider rounded-xl md:rounded-sm transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                    selectedPillarId === 'all'
+                    !showSavedOnly && selectedPillarId === 'all'
                       ? 'bg-[#081224] text-[#F5B731] dark:bg-[#F5B731] dark:text-[#081224]'
                       : 'text-stone-700 dark:text-slate-300 hover:text-[#081224] dark:hover:text-white'
                   }`}
                 >
                   Todos ({allPosts.length})
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={showSavedOnly}
+                  onClick={() => {
+                    setShowSavedOnly(true);
+                    setSelectedPillarId('all');
+                    setVisibleCount(12);
+                  }}
+                  className={`min-h-[38px] px-3 py-1.5 text-xs font-display font-bold uppercase tracking-wider rounded-xl md:rounded-sm transition-colors cursor-pointer whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 ${
+                    showSavedOnly
+                      ? 'bg-[#081224] text-[#F5B731] dark:bg-[#F5B731] dark:text-[#081224]'
+                      : 'text-stone-700 dark:text-slate-300 hover:text-[#081224] dark:hover:text-white'
+                  }`}
+                >
+                  <Bookmark size={12} />
+                  <span>Salvos ({bookmarkedIds.length})</span>
+                </button>
                 {EDITORIAL_PILLARS.map((pillar) => (
                   <button
                     key={pillar.id}
                     type="button"
                     role="tab"
-                    aria-selected={selectedPillarId === pillar.id}
+                    aria-selected={!showSavedOnly && selectedPillarId === pillar.id}
                     onClick={() => {
+                      setShowSavedOnly(false);
                       setSelectedPillarId(pillar.id);
                       setVisibleCount(12);
                     }}
                     className={`min-h-[38px] px-3 py-1.5 text-xs font-display font-bold uppercase tracking-wider rounded-xl md:rounded-sm transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                      selectedPillarId === pillar.id
+                      !showSavedOnly && selectedPillarId === pillar.id
                         ? 'bg-[#081224] text-[#F5B731] dark:bg-[#F5B731] dark:text-[#081224]'
                         : 'text-stone-700 dark:text-slate-300 hover:text-[#081224] dark:hover:text-white'
                     }`}
@@ -1462,50 +1631,78 @@ export default function App() {
             <AdSenseSlot slotId="archive-leaderboard-top" format="leaderboard" />
 
             {/* Articles Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-              {displayedArchivePosts.map((post) => {
-                const metrics = calculateReadingMetrics(post.content.rendered);
-                return (
-                  <article
-                    key={post.id}
-                    onClick={() => openPost(post)}
-                    className="bg-white dark:bg-[#0D1E3A] border border-stone-200 dark:border-[#1B3358] hover:border-[#D97706] dark:hover:border-[#F5B731] rounded-2xl md:rounded-sm overflow-hidden flex flex-col cursor-pointer group transition-colors shadow-xs md:shadow-none"
-                  >
-                    <div className="aspect-16/10 w-full overflow-hidden bg-stone-200 dark:bg-[#050C18]">
-                      <img
-                        src={getPostHeroImage(post)}
-                        alt={stripHtmlTags(post.title.rendered)}
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500"
-                      />
-                    </div>
-                    <div className="p-5 flex-1 flex flex-col">
-                      <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-slate-400 mb-2">
-                        <span className="font-bold text-[#B45309] dark:text-[#F5B731]">
-                          {getCategoryNameForPost(post, allCategories)}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>{formatEditorialDate(post.date)}</span>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{metrics.readingTimeMinutes} min</span>
+            {displayedArchivePosts.length === 0 ? (
+              <div className="bg-white dark:bg-[#0D1E3A] border border-stone-200 dark:border-[#1B3358] rounded-2xl md:rounded-sm p-10 text-center">
+                <Bookmark size={28} className="mx-auto text-[#B45309] dark:text-[#F5B731] mb-3" />
+                <h2 className="font-display text-lg font-black uppercase text-[#081224] dark:text-white mb-1">
+                  Nenhum artigo salvo ainda
+                </h2>
+                <p className="text-xs sm:text-sm text-stone-600 dark:text-slate-300 mb-5 max-w-md mx-auto">
+                  Clique no botão “Salvar” dentro de qualquer reportagem para criar sua lista pessoal de leitura.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowSavedOnly(false)}
+                  className="min-h-[42px] px-5 py-2 rounded-xl md:rounded-sm bg-[#F5B731] text-[#081224] text-xs font-display font-extrabold uppercase tracking-wider cursor-pointer"
+                >
+                  Explorar Todos os Artigos
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+                {displayedArchivePosts.map((post) => {
+                  const metrics = calculateReadingMetrics(post.content.rendered);
+                  const saved = bookmarkedIds.includes(post.id);
+                  return (
+                    <article
+                      key={post.id}
+                      onClick={() => openPost(post)}
+                      className="bg-white dark:bg-[#0D1E3A] border border-stone-200 dark:border-[#1B3358] hover:border-[#D97706] dark:hover:border-[#F5B731] rounded-2xl md:rounded-sm overflow-hidden flex flex-col cursor-pointer group transition-colors shadow-xs md:shadow-none"
+                    >
+                      <div className="relative aspect-16/10 w-full overflow-hidden bg-stone-200 dark:bg-[#050C18]">
+                        <img
+                          src={getPostHeroImage(post)}
+                          alt={stripHtmlTags(post.title.rendered)}
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500"
+                        />
+                        {saved && (
+                          <span
+                            title="Artigo salvo"
+                            className="absolute top-2.5 right-2.5 w-7 h-7 rounded-full bg-[#081224]/90 text-[#F5B731] flex items-center justify-center shadow"
+                          >
+                            <Bookmark size={13} className="fill-current" />
+                          </span>
+                        )}
                       </div>
-                      <h2 className="font-display font-extrabold text-lg uppercase text-[#081224] dark:text-white group-hover:text-[#B45309] dark:group-hover:text-[#F5B731] transition-colors leading-snug mb-2 line-clamp-2">
-                        {stripHtmlTags(post.title.rendered)}
-                      </h2>
-                      <p className="text-xs text-stone-600 dark:text-slate-300 line-clamp-3 leading-relaxed mb-4 flex-1">
-                        {stripHtmlTags(post.excerpt.rendered)}
-                      </p>
-                      <div className="pt-3 border-t border-stone-200 dark:border-[#1B3358] flex items-center justify-between text-xs font-display font-extrabold uppercase tracking-wider text-[#B45309] dark:text-[#F5B731]">
-                        <span>Ler artigo completo</span>
-                        <ArrowRight size={13} />
+                      <div className="p-5 flex-1 flex flex-col">
+                        <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-slate-400 mb-2">
+                          <span className="font-bold text-[#B45309] dark:text-[#F5B731]">
+                            {getCategoryNameForPost(post, allCategories)}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatEditorialDate(post.date)}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono tabular-nums">{metrics.readingTimeMinutes} min</span>
+                        </div>
+                        <h2 className="font-display font-extrabold text-lg uppercase text-[#081224] dark:text-white group-hover:text-[#B45309] dark:group-hover:text-[#F5B731] transition-colors leading-snug mb-2 line-clamp-2">
+                          {stripHtmlTags(post.title.rendered)}
+                        </h2>
+                        <p className="text-xs text-stone-600 dark:text-slate-300 line-clamp-3 leading-relaxed mb-4 flex-1">
+                          {stripHtmlTags(post.excerpt.rendered)}
+                        </p>
+                        <div className="pt-3 border-t border-stone-200 dark:border-[#1B3358] flex items-center justify-between text-xs font-display font-extrabold uppercase tracking-wider text-[#B45309] dark:text-[#F5B731]">
+                          <span>Ler artigo completo</span>
+                          <ArrowRight size={13} />
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
 
             {visibleCount < archivePosts.length && (
               <div className="mt-8 sm:mt-10 text-center">
@@ -1523,22 +1720,68 @@ export default function App() {
 
         {/* VIEW 4: AUTHORED MINI-GAMES SHOWCASE */}
         {!selectedPost && activeView === 'jogos' && (
-          <JogosAutoraisPage allPosts={allPosts} onSelectPost={openPost} />
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <JogosAutoraisPage allPosts={allPosts} onSelectPost={openPost} />
+          </Suspense>
         )}
 
         {/* VIEW 5: CURATED STORE (Shopee Ready) */}
-        {!selectedPost && activeView === 'loja' && <Store />}
+        {!selectedPost && activeView === 'loja' && (
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <Store />
+          </Suspense>
+        )}
 
-        {/* VIEW 5: LEGAL & COMPLIANCE PAGES (Privacy Policy, Terms, Cookies/Editorial Policy) */}
+        {/* VIEW 6: ABOUT US (E-E-A-T Page) */}
+        {!selectedPost && activeView === 'sobre' && (
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <AboutPage
+              totalArticles={allPosts.length}
+              totalWords={totalWordCount}
+              onBackHome={() => navigateToView('inicio')}
+              onNavigateContact={() => navigateToView('contato')}
+              onNavigateArticles={(pillarId) => navigateToView('artigos', pillarId || 'all')}
+              onNavigateGames={() => navigateToView('jogos')}
+            />
+          </Suspense>
+        )}
+
+        {/* VIEW 7: CONTACT PAGE (Firestore-backed Inbox) */}
+        {!selectedPost && activeView === 'contato' && (
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <ContactPage
+              onBackHome={() => navigateToView('inicio')}
+              onNavigatePrivacy={() => navigateToView('privacidade')}
+            />
+          </Suspense>
+        )}
+
+        {/* VIEW 8: PROTECTED EDITORIAL ADMIN CMS */}
+        {!selectedPost && activeView === 'admin' && (
+          <Suspense fallback={<ViewSuspenseFallback />}>
+            <EditorialAdminPage
+              allPosts={allPosts}
+              cmsArticles={cmsArticles}
+              categories={allCategories}
+              onRefreshCmsArticles={fetchCmsArticles}
+              onBackHome={() => navigateToView('inicio')}
+              onOpenPost={openPost}
+            />
+          </Suspense>
+        )}
+
+        {/* VIEW 9: LEGAL & COMPLIANCE PAGES (Privacy Policy, Terms, Cookies/Editorial Policy) */}
         {!selectedPost &&
           (activeView === 'privacidade' ||
             activeView === 'termos' ||
             activeView === 'cookies') && (
-            <LegalPages
-              page={activeView}
-              onBackHome={() => navigateToView('inicio')}
-              onNavigateLegal={(p) => navigateToView(p)}
-            />
+            <Suspense fallback={<ViewSuspenseFallback />}>
+              <LegalPages
+                page={activeView}
+                onBackHome={() => navigateToView('inicio')}
+                onNavigateLegal={(p) => navigateToView(p)}
+              />
+            </Suspense>
           )}
       </main>
 
@@ -1610,6 +1853,24 @@ export default function App() {
                   </button>
                 </li>
                 <li>
+                  <button
+                    type="button"
+                    onClick={() => navigateToView('sobre')}
+                    className="hover:text-[#B45309] dark:hover:text-[#F5B731] cursor-pointer"
+                  >
+                    Sobre Nós
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => navigateToView('contato')}
+                    className="hover:text-[#B45309] dark:hover:text-[#F5B731] cursor-pointer"
+                  >
+                    Fale Conosco
+                  </button>
+                </li>
+                <li>
                   <a
                     href="https://www.instagram.com/achar.temas?igsh=eTlqaGNwYnYydzB6"
                     target="_blank"
@@ -1655,6 +1916,17 @@ export default function App() {
                     Política Editorial, Cookies & Comentários
                   </button>
                 </li>
+                {isAdmin && (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => navigateToView('admin')}
+                      className="hover:text-[#B45309] dark:hover:text-[#F5B731] cursor-pointer text-left font-bold"
+                    >
+                      Painel Editorial (Admin)
+                    </button>
+                  </li>
+                )}
               </ul>
             </div>
           </div>
@@ -1662,6 +1934,20 @@ export default function App() {
           <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-stone-500 dark:text-slate-400">
             <div>© 2026 Achar Temas. Todos os direitos reservados.</div>
             <div className="flex flex-wrap items-center justify-center gap-4">
+              <button
+                type="button"
+                onClick={() => navigateToView('sobre')}
+                className="hover:text-[#B45309] dark:hover:text-[#F5B731] cursor-pointer"
+              >
+                Sobre
+              </button>
+              <button
+                type="button"
+                onClick={() => navigateToView('contato')}
+                className="hover:text-[#B45309] dark:hover:text-[#F5B731] cursor-pointer"
+              >
+                Contato
+              </button>
               <button
                 type="button"
                 onClick={() => navigateToView('privacidade')}
@@ -1683,6 +1969,14 @@ export default function App() {
               >
                 Cookies
               </button>
+              <a
+                href="/rss.xml"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-[#081224] dark:hover:text-white"
+              >
+                Feed RSS
+              </a>
               <a
                 href="/sitemap.xml"
                 target="_blank"
@@ -1762,13 +2056,17 @@ export default function App() {
       )}
 
       {/* Search Modal */}
-      <SearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        allPosts={allPosts}
-        categories={allCategories}
-        onSelectPost={openPost}
-      />
+      {isSearchOpen && (
+        <Suspense fallback={null}>
+          <SearchModal
+            isOpen={isSearchOpen}
+            onClose={() => setIsSearchOpen(false)}
+            allPosts={allPosts}
+            categories={allCategories}
+            onSelectPost={openPost}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

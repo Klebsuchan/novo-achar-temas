@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, lazy, Suspense } from 'react';
 import { Gamepad2, ArrowRight, Crosshair, FlaskConical, PaintBucket, Trophy, Building2 } from 'lucide-react';
 import { Post, stripHtmlTags } from '../../utils/blogLogic';
 import {
@@ -7,11 +7,16 @@ import {
   getGameCatalogItem,
   getGameTypeForPost,
 } from '../../games/gameRegistry';
-import WesternShooterGame from './WesternShooterGame';
-import ChemistryLabGame from './ChemistryLabGame';
-import OceanPaintGame from './OceanPaintGame';
-import AthleticsRunnerGame from './AthleticsRunnerGame';
-import BuilderTetrisGame from './BuilderTetrisGame';
+import { useFirebaseAuth } from '../../contexts/FirebaseAuthContext';
+import { recordOfficialGameScore } from '../../services/gameScores';
+import { trackGameEvent } from '../../utils/analytics';
+import GameLeaderboardPanel from './GameLeaderboardPanel';
+
+const WesternShooterGame = lazy(() => import('./WesternShooterGame'));
+const ChemistryLabGame = lazy(() => import('./ChemistryLabGame'));
+const OceanPaintGame = lazy(() => import('./OceanPaintGame'));
+const AthleticsRunnerGame = lazy(() => import('./AthleticsRunnerGame'));
+const BuilderTetrisGame = lazy(() => import('./BuilderTetrisGame'));
 
 interface JogosAutoraisPageProps {
   allPosts: Post[];
@@ -27,13 +32,33 @@ const GAME_ICONS: Record<GameType, typeof Crosshair> = {
 };
 
 export default function JogosAutoraisPage({ allPosts, onSelectPost }: JogosAutoraisPageProps) {
+  const { user } = useFirebaseAuth();
   const [selectedGame, setSelectedGame] = useState<GameType>('western');
+  const [leaderboardRefresh, setLeaderboardRefresh] = useState(0);
+  const [lastPersonalBest, setLastPersonalBest] = useState<number | undefined>(undefined);
+
   const allGames = getAllGameTypes();
   const activeMeta = getGameCatalogItem(selectedGame);
 
   const matchingPosts = useMemo(
     () => allPosts.filter((p) => getGameTypeForPost(p) === selectedGame).slice(0, 4),
     [allPosts, selectedGame]
+  );
+
+  const handleScoreRecord = useCallback(
+    (rawScore: number) => {
+      if (!Number.isFinite(rawScore) || rawScore <= 0) return;
+      trackGameEvent(selectedGame, 'score', Math.floor(rawScore));
+      recordOfficialGameScore(user, selectedGame, rawScore)
+        .then(({ personalBest }) => {
+          setLastPersonalBest(personalBest);
+          setLeaderboardRefresh((c) => c + 1);
+        })
+        .catch(() => {
+          // Error telemetry handled inside recordOfficialGameScore
+        });
+    },
+    [user, selectedGame]
   );
 
   return (
@@ -75,7 +100,10 @@ export default function JogosAutoraisPage({ allPosts, onSelectPost }: JogosAutor
               key={gt}
               type="button"
               data-arcade-select={gt}
-              onClick={() => setSelectedGame(gt)}
+              onClick={() => {
+                setSelectedGame(gt);
+                setLastPersonalBest(undefined);
+              }}
               className={`min-w-[172px] max-w-[185px] lg:max-w-none lg:min-w-0 snap-start shrink-0 p-3 sm:p-4 rounded-2xl md:rounded-sm border text-left flex flex-col justify-between transition-colors cursor-pointer shadow-2xs md:shadow-none ${
                 isActive
                   ? 'bg-[#081224] text-white border-[#F5B731] ring-1 ring-[#F5B731]'
@@ -135,21 +163,50 @@ export default function JogosAutoraisPage({ allPosts, onSelectPost }: JogosAutor
           </div>
         </div>
 
-        {selectedGame === 'western' && (
-          <WesternShooterGame articleTitle="Acervo Histórico Achar Temas" />
-        )}
-        {selectedGame === 'chemistry' && (
-          <ChemistryLabGame articleTitle="Caderno Ciência & Natureza" />
-        )}
-        {selectedGame === 'ocean-paint' && (
-          <OceanPaintGame articleTitle="Ateliê Arte & Curiosidades" />
-        )}
-        {selectedGame === 'athletics' && (
-          <AthleticsRunnerGame articleTitle="Pista Saúde & Esporte" />
-        )}
-        {selectedGame === 'builder-tetris' && (
-          <BuilderTetrisGame articleTitle="Arquitetura & Construção" />
-        )}
+        <Suspense
+          fallback={
+            <div className="p-10 text-center text-xs font-mono text-stone-500 dark:text-slate-400">
+              Carregando motor do jogo...
+            </div>
+          }
+        >
+          {selectedGame === 'western' && (
+            <WesternShooterGame
+              articleTitle="Acervo Histórico Achar Temas"
+              onScoreRecord={handleScoreRecord}
+            />
+          )}
+          {selectedGame === 'chemistry' && (
+            <ChemistryLabGame
+              articleTitle="Caderno Ciência & Natureza"
+              onScoreRecord={handleScoreRecord}
+            />
+          )}
+          {selectedGame === 'ocean-paint' && (
+            <OceanPaintGame
+              articleTitle="Ateliê Arte & Curiosidades"
+              onScoreRecord={handleScoreRecord}
+            />
+          )}
+          {selectedGame === 'athletics' && (
+            <AthleticsRunnerGame
+              articleTitle="Pista Saúde & Esporte"
+              onScoreRecord={handleScoreRecord}
+            />
+          )}
+          {selectedGame === 'builder-tetris' && (
+            <BuilderTetrisGame
+              articleTitle="Arquitetura & Construção"
+              onScoreRecord={handleScoreRecord}
+            />
+          )}
+        </Suspense>
+
+        <GameLeaderboardPanel
+          gameType={selectedGame}
+          refreshTrigger={leaderboardRefresh}
+          lastPersonalBest={lastPersonalBest}
+        />
       </div>
 
       {/* Related Articles Connected to Selected Game */}

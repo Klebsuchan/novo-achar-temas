@@ -10,7 +10,13 @@ import {
 } from '../../games/gameLogic';
 import { gameSfx } from '../../games/soundEffects';
 
-export default function ChemistryLabGame({ articleTitle }: { articleTitle: string }) {
+export default function ChemistryLabGame({
+  articleTitle,
+  onScoreRecord,
+}: {
+  articleTitle: string;
+  onScoreRecord?: (score: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [phase, setPhase] = useState<'title' | 'playing' | 'victory'>('title');
   const [flaskAtoms, setFlaskAtoms] = useState<Partial<Record<AtomSymbol, number>>>({});
@@ -209,7 +215,9 @@ export default function ChemistryLabGame({ articleTitle }: { articleTitle: strin
       const isMissionTarget = match.id === currentMission.id;
       const bonus = isMissionTarget ? 100 : 0;
       const pts = (isNew ? match.points : 40) + bonus;
-      setScore((s) => s + pts);
+      const nextScore = score + pts;
+      setScore(nextScore);
+      onScoreRecord?.(nextScore);
 
       if (isNew) {
         const nextDiscovered = [...discoveredIds, match.id];

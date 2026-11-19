@@ -93,6 +93,190 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "EditorialArticle": {
+      "title": "EditorialArticle",
+      "description": "Article managed via the Achar Temas editorial CMS.",
+      "type": "object",
+      "properties": {
+        "postId": {
+          "type": "integer",
+          "description": "Unique positive numeric ID for the article (>= 1000 for CMS articles)."
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 160,
+          "description": "URL-friendly slug for the article."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 180,
+          "description": "Headline of the article."
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500,
+          "description": "Short summary shown in editorial cards."
+        },
+        "contentHtml": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 100000,
+          "description": "Full HTML editorial body."
+        },
+        "categoryId": {
+          "type": "integer",
+          "description": "Category ID mapped to one of the editorial pillars."
+        },
+        "heroImage": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Hero illustration URL or local asset path."
+        },
+        "published": {
+          "type": "boolean",
+          "description": "Whether the article is publicly visible."
+        },
+        "focusKeyword": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Primary SEO focus keyword."
+        },
+        "metaDescription": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "SEO meta description."
+        },
+        "authorUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the editorial admin who created the article."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when article was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when article was last updated."
+        }
+      },
+      "required": [
+        "postId",
+        "slug",
+        "title",
+        "excerpt",
+        "contentHtml",
+        "categoryId",
+        "heroImage",
+        "published",
+        "focusKeyword",
+        "metaDescription",
+        "authorUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ContactMessage": {
+      "title": "ContactMessage",
+      "description": "Reader contact message submitted through the Contato page (admin-only read).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100,
+          "description": "Sender full name."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 160,
+          "description": "Sender email address (isolated PII)."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 140,
+          "description": "Subject of the contact inquiry."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 3000,
+          "description": "Message body."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["new", "read", "replied"],
+          "description": "Editorial moderation status."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when message was submitted."
+        }
+      },
+      "required": ["name", "email", "subject", "message", "status", "createdAt"]
+    },
+    "GameScore": {
+      "title": "GameScore",
+      "description": "Verified player personal best score per authored mini-game for the portal leaderboard.",
+      "type": "object",
+      "properties": {
+        "userUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the player."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60,
+          "description": "Public display name on leaderboard."
+        },
+        "playerPhotoUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional Google avatar URL."
+        },
+        "gameType": {
+          "type": "string",
+          "enum": ["western", "chemistry", "ocean-paint", "athletics", "builder-tetris"],
+          "description": "Identifier of the authored mini-game."
+        },
+        "bestScore": {
+          "type": "integer",
+          "description": "Best numeric score achieved by the player in this game."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of first recorded score."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest high score."
+        }
+      },
+      "required": [
+        "userUid",
+        "playerName",
+        "playerPhotoUrl",
+        "gameType",
+        "bestScore",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -100,13 +284,31 @@
       "schema": {
         "$ref": "#/entities/Comment"
       },
-      "description": "Publicly readable reader comments on blog posts; only authenticated verified Google users can create or delete their own comments."
+      "description": "Publicly readable reader comments on blog posts; verified Google users can create or delete their own comments, and the editorial admin can moderate."
     },
     "/newsletter_subscriptions/{userId}": {
       "schema": {
         "$ref": "#/entities/NewsletterSubscription"
       },
-      "description": "Isolated PII collection storing reader email subscriptions keyed by auth UID; readable and writable only by the owner."
+      "description": "Isolated PII collection storing reader email subscriptions keyed by auth UID; readable and writable by the owner, and listable by verified editorial admin."
+    },
+    "/articles/{articleId}": {
+      "schema": {
+        "$ref": "#/entities/EditorialArticle"
+      },
+      "description": "CMS articles managed by the verified editorial admin; published articles are publicly readable."
+    },
+    "/contact_messages/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/ContactMessage"
+      },
+      "description": "Reader contact submissions (write-only for visitors with strict schema validation; readable and updatable only by verified editorial admin)."
+    },
+    "/game_scores/{scoreId}": {
+      "schema": {
+        "$ref": "#/entities/GameScore"
+      },
+      "description": "Publicly readable leaderboard scores per game; verified Google users can record and improve their own score document."
     }
   }
 }

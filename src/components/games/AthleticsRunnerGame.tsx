@@ -27,8 +27,18 @@ const RACE_GOAL_METERS = 600;
 const LANE_CENTERS = [120, 180, 240, 300];
 const PLAYER_SCREEN_X = 165;
 
-export default function AthleticsRunnerGame({ articleTitle }: { articleTitle: string }) {
+export default function AthleticsRunnerGame({
+  articleTitle,
+  onScoreRecord,
+}: {
+  articleTitle: string;
+  onScoreRecord?: (score: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const onScoreRecordRef = useRef(onScoreRecord);
+  useEffect(() => {
+    onScoreRecordRef.current = onScoreRecord;
+  }, [onScoreRecord]);
   const [phase, setPhase] = useState<GamePhase>('title');
   const [distance, setDistance] = useState(0);
   const [positionRank, setPositionRank] = useState(10);
@@ -303,6 +313,11 @@ export default function AthleticsRunnerGame({ articleTitle }: { articleTitle: st
         if (s.distance >= RACE_GOAL_METERS) {
           setPhase('victory');
           gameSfx.playSuccess();
+          const finalScore =
+            Math.round(RACE_GOAL_METERS) +
+            s.overtakes * 150 +
+            (rank === 1 ? 500 : rank <= 3 ? 250 : 0);
+          onScoreRecordRef.current?.(finalScore);
         }
       }
 
@@ -550,7 +565,10 @@ export default function AthleticsRunnerGame({ articleTitle }: { articleTitle: st
               Você Terminou em {positionRank}º Lugar!
             </h4>
             <p className="text-xs sm:text-sm text-slate-300 mb-4 sm:mb-5">
-              Ultrapassagens realizadas: <strong className="text-emerald-400 font-mono">{overtakes} corredores</strong>
+              Ultrapassagens: <strong className="text-emerald-400 font-mono">{overtakes} corredores</strong> · Pontuação:{' '}
+              <strong className="text-[#F5B731] font-mono">
+                {Math.round(RACE_GOAL_METERS) + overtakes * 150 + (positionRank === 1 ? 500 : positionRank <= 3 ? 250 : 0)} pts
+              </strong>
             </p>
             <button
               type="button"

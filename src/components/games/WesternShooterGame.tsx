@@ -73,8 +73,18 @@ const SPOTS: SpawnSpot[] = [
   { id: 5, x: 615, y: 328, label: 'Carroça', heightLimit: 78 },
 ];
 
-export default function WesternShooterGame({ articleTitle }: { articleTitle: string }) {
+export default function WesternShooterGame({
+  articleTitle,
+  onScoreRecord,
+}: {
+  articleTitle: string;
+  onScoreRecord?: (score: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const onScoreRecordRef = useRef(onScoreRecord);
+  useEffect(() => {
+    onScoreRecordRef.current = onScoreRecord;
+  }, [onScoreRecord]);
   const [phase, setPhase] = useState<GamePhase>('title');
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(5);
@@ -294,6 +304,7 @@ export default function WesternShooterGame({ articleTitle }: { articleTitle: str
             } else {
               setPhase('victory');
               gameSfx.playSuccess();
+              onScoreRecordRef.current?.(s.score);
             }
           }
         } else {
@@ -498,6 +509,7 @@ export default function WesternShooterGame({ articleTitle }: { articleTitle: str
                 spawnFloater(v.x, v.y - 68, 'TIRO RECEBIDO!', '#FCA5A5');
                 if (s.lives <= 0) {
                   setPhase('gameover');
+                  onScoreRecordRef.current?.(s.score);
                 }
               }
               s.villains.splice(i, 1);
@@ -523,6 +535,7 @@ export default function WesternShooterGame({ articleTitle }: { articleTitle: str
               spawnBurst(s.dynamite.x, s.dynamite.y, '#EF4444', 18);
               if (s.lives <= 0) {
                 setPhase('gameover');
+                onScoreRecordRef.current?.(s.score);
               }
             }
           }

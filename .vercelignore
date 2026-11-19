@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.aistudio
+.playwright-cli
+*.test.ts
+firestore.rules
+DRAFT_firestore.rules
+security_spec.md
+firebase-blueprint.json
+.env*
+!.env.example

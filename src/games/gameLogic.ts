@@ -346,3 +346,29 @@ export function getBuildingRankLabel(floorsBuilt: number): string {
   if (floorsBuilt >= 2) return 'Casa Térrea';
   return 'Fundação em Obras';
 }
+
+export interface LeaderboardEntry {
+  userUid: string;
+  playerName: string;
+  playerPhotoUrl: string;
+  gameType: string;
+  bestScore: number;
+  updatedAtIso: string;
+}
+
+export function rankLeaderboardEntries(
+  entries: LeaderboardEntry[],
+  limit = 10
+): LeaderboardEntry[] {
+  const bestByUid = new Map<string, LeaderboardEntry>();
+  for (const item of entries) {
+    if (!item || typeof item.bestScore !== 'number' || item.bestScore < 0) continue;
+    const prev = bestByUid.get(item.userUid);
+    if (!prev || item.bestScore > prev.bestScore) {
+      bestByUid.set(item.userUid, item);
+    }
+  }
+  return Array.from(bestByUid.values())
+    .sort((a, b) => b.bestScore - a.bestScore)
+    .slice(0, Math.max(1, limit));
+}

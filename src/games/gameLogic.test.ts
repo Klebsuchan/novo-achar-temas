@@ -14,6 +14,7 @@ import {
   isValidPosition,
   lockPieceAndClearLines,
   rotateMatrixCW,
+  rankLeaderboardEntries,
   PIECE_SHAPES,
 } from './gameLogic';
 
@@ -75,7 +76,6 @@ test('architectural Tetris engine handles rotation, collision, row clearing, and
   assert.equal(isValidPosition(board, PIECE_SHAPES.O, 0, 4), true);
   assert.equal(isValidPosition(board, PIECE_SHAPES.O, 0, 9), false);
 
-  // Fill bottom row except last 2 columns, then drop an O piece to test clearing? O is 2 high so let's fill 17th row except cols 4..5
   for (let c = 0; c < TETRIS_COLS; c++) {
     if (c < 4 || c > 5) {
       board[TETRIS_ROWS - 1][c] = { type: 'I', style: 'concrete' };
@@ -91,4 +91,20 @@ test('architectural Tetris engine handles rotation, collision, row clearing, and
   assert.equal(getBuildingRankLabel(0), 'Fundação em Obras');
   assert.equal(getBuildingRankLabel(6), 'Sobrado Moderno');
   assert.equal(getBuildingRankLabel(20), 'Arranha-Céu Metropolitano');
+});
+
+test('rankLeaderboardEntries deduplicates players, ignores negative scores, and sorts descending', () => {
+  const ranked = rankLeaderboardEntries(
+    [
+      { userUid: 'u1', playerName: 'Ana', playerPhotoUrl: '', gameType: 'western', bestScore: 900, updatedAtIso: '2026-01-01' },
+      { userUid: 'u1', playerName: 'Ana', playerPhotoUrl: '', gameType: 'western', bestScore: 1500, updatedAtIso: '2026-01-02' },
+      { userUid: 'u2', playerName: 'Beto', playerPhotoUrl: '', gameType: 'western', bestScore: 2100, updatedAtIso: '2026-01-02' },
+      { userUid: 'u3', playerName: 'Carlos', playerPhotoUrl: '', gameType: 'western', bestScore: -10, updatedAtIso: '2026-01-02' },
+    ],
+    5
+  );
+  assert.equal(ranked.length, 2);
+  assert.equal(ranked[0].userUid, 'u2');
+  assert.equal(ranked[1].userUid, 'u1');
+  assert.equal(ranked[1].bestScore, 1500);
 });
